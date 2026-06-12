@@ -1,22 +1,29 @@
 {
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "SmartForest illegal logging detection backend",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "jest",
+    "test:verbose": "jest --verbose"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "forceExit": true,
+    "silent": true,
+    "testTimeout": 10000
+  },
   "dependencies": {
+    "@supabase/supabase-js": "^2.49.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "mqtt": "^5.15.1",
     "pg": "^8.21.0"
   },
-  "name": "backend",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
   "devDependencies": {
     "jest": "^30.4.2",
     "nodemon": "^3.1.14",
