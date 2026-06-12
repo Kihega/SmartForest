@@ -1,0 +1,30 @@
+version: '3.8'
+
+# Used for Render.com cloud deployment only.
+# Local dev runs Node and Mosquitto directly (no Docker needed).
+
+services:
+
+  backend:
+    build: ./backend
+    ports:
+      - "5000:5000"
+    env_file: ./backend/.env
+    depends_on:
+      - mqtt-broker
+    restart: unless-stopped
+
+  mqtt-broker:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+    restart: unless-stopped
+
+  simulator:
+    build: ./simulator
+    depends_on:
+      - mqtt-broker
+    restart: unless-stopped

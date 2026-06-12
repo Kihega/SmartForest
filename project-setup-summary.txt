@@ -1,9 +1,10 @@
 =====================================================================
-  WEB-BASED ILLEGAL LOGGING DETECTION SYSTEM — PROJECT SETUP SUMMARY
+  SMARTFOREST - ILLEGAL LOGGING DETECTION SYSTEM
+  PROJECT SETUP SUMMARY (v3 - Updated)
 =====================================================================
-  Stack: Express.js | React.js | PostgreSQL (Supabase) | MQTT
-  Project: Kibiti Forest Illegal Logging Detection System
-  Date: June 2026
+  Stack  : Express.js | React.js | PostgreSQL (Supabase) | MQTT
+  Region : Kibiti Forest, Tanzania
+  Updated: June 2026
 =====================================================================
 
 
@@ -11,578 +12,325 @@
 1. TECH STACK OVERVIEW
 ---------------------------------------------------------------------
 
-  Layer           | Technology              | Purpose
-  ----------------|-------------------------|---------------------------
-  Backend         | Node.js + Express.js    | REST API + MQTT subscriber
-  Frontend        | React.js (Vite)         | Live dashboard & alerts UI
-  Database        | PostgreSQL via Supabase  | Store sensor data & alerts
-  IoT Simulation  | MQTT (Mosquitto broker) | Simulate sensor messages
-  Containerization| Docker + Docker Compose | Run all services together
-  Version Control | Git + GitHub            | Source control
-  CI/CD           | GitHub Actions          | Automated testing & builds
+  Layer            | Technology              | Purpose
+  -----------------|-------------------------|---------------------------
+  Backend          | Node.js + Express.js    | REST API + MQTT subscriber
+  Frontend         | React.js (Vite)         | Live dashboard & alerts UI
+  Database         | PostgreSQL via Supabase | Data store + Auth/JWT cache
+  IoT Simulation   | MQTT (Mosquitto)        | Fake hardware sensor data
+  Local Dev        | Node only (no Docker)   | Kali Linux minimal machine
+  Backend Cloud    | Render.com (Docker)     | Cloud backend hosting
+  Frontend Cloud   | Vercel                  | Frontend hosting (free)
+  Version Control  | Git + GitHub            | Source control
+  CI/CD            | GitHub Actions          | Auto-test + auto-merge
 
 
 ---------------------------------------------------------------------
-2. PREREQUISITES — SOFTWARE TO INSTALL
+2. TWO ENVIRONMENTS
 ---------------------------------------------------------------------
 
-  Software          Version     Download
-  ------------------|-----------|--------------------------------------
-  Node.js           v20+        https://nodejs.org
-  Python            3.11+       https://python.org  (for simulator)
-  Docker Desktop    Latest      https://docker.com/products/docker-desktop
-  Git               Latest      https://git-scm.com
-  VS Code           Latest      https://code.visualstudio.com
-  Mosquitto CLI     Latest      https://mosquitto.org/download
-                                (for testing MQTT from terminal)
+  A) LOCAL - Kali Linux / Nethunter on Termux
+     - No Docker required
+     - Backend  : plain Node  (npm run dev -> localhost:5000)
+     - Frontend : Vite dev    (npm run dev -> localhost:5173)
+     - MQTT     : Mosquitto via apt
+     - Simulator: Python in venv
+     - Database : Supabase cloud (no local DB needed)
 
-  Recommended VS Code Extensions:
-    - REST Client
-    - Docker
-    - GitLens
-    - ESLint
-    - Prettier
+  B) CLOUD
+     - Backend  : Render.com (free tier, Docker container)
+     - Frontend : Vercel     (free tier, auto-deploy from GitHub)
+     - MQTT     : Mosquitto in Docker on Render
+     - Simulator: Railway.app (optional, see Section 8)
+     - Database : Same Supabase project
+
+  Local Mosquitto install:
+    sudo apt install mosquitto mosquitto-clients -y
+    mosquitto -c mosquitto.conf
 
 
 ---------------------------------------------------------------------
 3. PROJECT FOLDER STRUCTURE
 ---------------------------------------------------------------------
 
-  illegal-logging-detection/
-  │
-  ├── backend/                        <- Express.js API server
-  │   ├── src/
-  │   │   ├── config/
-  │   │   │   └── db.js               <- Supabase/PostgreSQL connection
-  │   │   ├── routes/
-  │   │   │   ├── alerts.js           <- GET/POST alert endpoints
-  │   │   │   └── sensors.js          <- Sensor data endpoints
-  │   │   ├── services/
-  │   │   │   ├── alertService.js     <- Alert threshold logic
-  │   │   │   └── mqttService.js      <- MQTT subscriber logic
-  │   │   ├── models/
-  │   │   │   └── sensorModel.js      <- DB query functions
-  │   │   └── index.js                <- Express app entry point
-  │   ├── .env                        <- Environment variables (secret)
-  │   ├── package.json
-  │   └── Dockerfile
-  │
-  ├── frontend/                       <- React.js dashboard
-  │   ├── src/
-  │   │   ├── components/
-  │   │   │   ├── AlertsTable.jsx     <- Live alerts list
-  │   │   │   ├── ForestMap.jsx       <- Map with sensor locations
-  │   │   │   └── SensorCard.jsx      <- Individual sensor status
-  │   │   ├── pages/
-  │   │   │   ├── Dashboard.jsx       <- Main monitoring page
-  │   │   │   └── Login.jsx           <- Authority login
-  │   │   ├── services/
-  │   │   │   └── api.js              <- Axios calls to backend
-  │   │   └── App.jsx
-  │   ├── .env
-  │   ├── package.json
-  │   └── Dockerfile
-  │
-  ├── simulator/                      <- MQTT IoT device simulator
-  │   ├── mqtt_simulator.py           <- Python MQTT publisher script
-  │   ├── requirements.txt
-  │   └── Dockerfile
-  │
-  ├── .github/
-  │   └── workflows/
-  │       └── ci.yml                  <- GitHub Actions CI pipeline
-  │
-  ├── docker-compose.yml              <- Orchestrate all services
-  ├── .gitignore
-  └── README.md
+  SmartForest/
+  |
+  +-- patch.py                        Master setup/patch script
+  +-- docker-compose.yml              Render.com cloud deploy only
+  +-- mosquitto.conf                  MQTT broker config
+  +-- vercel.json                     Vercel SPA routing config
+  +-- README.md
+  +-- .gitignore
+  +-- project-setup-summary.txt
+  |
+  +-- backend/
+  |   +-- src/
+  |   |   +-- index.js               Entry + /api/health endpoint
+  |   |   +-- config/
+  |   |   |   +-- db.js              Supabase PostgreSQL pool
+  |   |   |   +-- supabase.js        Supabase client (Auth/JWT)
+  |   |   +-- routes/
+  |   |   |   +-- alerts.js          Alert CRUD
+  |   |   |   +-- sensors.js         Sensor data
+  |   |   |   +-- auth.js            Login / JWT verify
+  |   |   +-- services/
+  |   |   |   +-- mqttService.js     MQTT subscriber
+  |   |   |   +-- alertService.js    Alert logic
+  |   |   |   +-- notificationService.js  Email/SMS alerts
+  |   |   +-- models/
+  |   |   |   +-- sensorModel.js     sensor_readings queries
+  |   |   |   +-- alertModel.js      alerts queries
+  |   |   |   +-- userModel.js       users queries
+  |   |   +-- middleware/
+  |   |       +-- authMiddleware.js  JWT verification
+  |   |       +-- errorHandler.js    Global error handler
+  |   +-- tests/
+  |   |   +-- alerts.test.js
+  |   |   +-- sensors.test.js
+  |   |   +-- auth.test.js
+  |   +-- .env.example
+  |   +-- package.json
+  |   +-- Dockerfile
+  |
+  +-- frontend/
+  |   +-- src/
+  |   |   +-- App.jsx
+  |   |   +-- main.jsx
+  |   |   +-- services/
+  |   |   |   +-- api.js             Smart dual-backend resolver
+  |   |   +-- pages/
+  |   |   |   +-- Dashboard.jsx      Live monitoring page
+  |   |   |   +-- Login.jsx          Ranger login
+  |   |   |   +-- AlertDetail.jsx    Single alert view
+  |   |   +-- components/
+  |   |   |   +-- AlertsTable.jsx    Live alerts table
+  |   |   |   +-- ForestMap.jsx      Leaflet map + sensor pins
+  |   |   |   +-- SensorCard.jsx     Per-sensor status card
+  |   |   |   +-- Navbar.jsx         Top navigation
+  |   |   |   +-- BackendStatus.jsx  No-backend error banner
+  |   |   +-- context/
+  |   |   |   +-- AuthContext.jsx    JWT + user role state
+  |   |   |   +-- AlertContext.jsx   Live alerts global state
+  |   |   +-- hooks/
+  |   |       +-- useAlerts.js       Poll /api/alerts every 10s
+  |   |       +-- useSensors.js      Poll /api/sensors/live 5s
+  |   |       +-- useBackend.js      Resolve backend on mount
+  |   +-- public/
+  |   +-- .env.example
+  |   +-- vercel.json                Vercel SPA routing
+  |   +-- package.json
+  |   +-- Dockerfile                 For local Docker only
+  |
+  +-- simulator/
+  |   +-- mqtt_simulator.py
+  |   +-- requirements.txt
+  |   +-- Dockerfile
+  |   +-- tests/
+  |       +-- test_simulator.py
+  |
+  +-- database/
+  |   +-- migrations/
+  |   |   +-- 001_create_sensor_readings.sql
+  |   |   +-- 002_create_alerts.sql
+  |   |   +-- 003_create_users.sql
+  |   +-- seeds/
+  |       +-- dev_seed.sql
+  |
+  +-- .github/
+      +-- workflows/
+          +-- ci.yml
 
 
 ---------------------------------------------------------------------
-4. SUPABASE (POSTGRESQL) SETUP
+4. SUPABASE DATABASE SETUP
 ---------------------------------------------------------------------
 
-  STEP 1: Create a free account at https://supabase.com
-  STEP 2: Create a new project, e.g. "illegal-logging-db"
-  STEP 3: Copy your credentials from Settings > API:
-            - SUPABASE_URL
-            - SUPABASE_ANON_KEY
-            - Database connection string (for direct pg connection)
+  1. Create free project at https://supabase.com
+  2. Open SQL Editor, run in order:
+       database/migrations/001_create_sensor_readings.sql
+       database/migrations/002_create_alerts.sql
+       database/migrations/003_create_users.sql
+  3. Optional: run database/seeds/dev_seed.sql for test data
+  4. Copy credentials from Settings > API into backend/.env
 
-  DATABASE TABLES TO CREATE (run in Supabase SQL Editor):
-
-    -- Sensor readings table
-    CREATE TABLE sensor_readings (
-      id          SERIAL PRIMARY KEY,
-      device_id   VARCHAR(50) NOT NULL,
-      zone        VARCHAR(100),
-      latitude    DOUBLE PRECISION,
-      longitude   DOUBLE PRECISION,
-      sound_db    NUMERIC(5,2),
-      vibration   NUMERIC(5,2),
-      is_alert    BOOLEAN DEFAULT FALSE,
-      recorded_at TIMESTAMPTZ DEFAULT NOW()
-    );
-
-    -- Alerts table
-    CREATE TABLE alerts (
-      id          SERIAL PRIMARY KEY,
-      device_id   VARCHAR(50),
-      zone        VARCHAR(100),
-      latitude    DOUBLE PRECISION,
-      longitude   DOUBLE PRECISION,
-      sound_db    NUMERIC(5,2),
-      vibration   NUMERIC(5,2),
-      status      VARCHAR(20) DEFAULT 'unresolved',
-      created_at  TIMESTAMPTZ DEFAULT NOW()
-    );
-
-    -- Ranger/authority users table
-    CREATE TABLE users (
-      id          SERIAL PRIMARY KEY,
-      name        VARCHAR(100),
-      email       VARCHAR(100) UNIQUE NOT NULL,
-      role        VARCHAR(20) DEFAULT 'ranger',
-      created_at  TIMESTAMPTZ DEFAULT NOW()
-    );
+  Supabase provides:
+    - PostgreSQL database
+    - Auth server (JWT creation + in-memory session cache)
+    - Row-Level Security for per-user access
 
 
 ---------------------------------------------------------------------
-5. BACKEND SETUP (Express.js)
+5. FRONTEND SMART BACKEND RESOLVER
 ---------------------------------------------------------------------
 
-  COMMANDS:
-    cd backend
-    npm init -y
-    npm install express pg dotenv cors mqtt
-    npm install --save-dev nodemon jest supertest
+  On startup, src/services/api.js auto-detects backend:
 
-  KEY FILE — backend/src/index.js:
-  ---------------------------------
-    const express = require('express');
-    const cors    = require('cors');
-    const { connectMQTT } = require('./services/mqttService');
+    Step 1 -> Try VITE_API_URL_CLOUD (Render.com), 4s timeout
+    Step 2 -> Try VITE_API_URL_LOCAL (localhost:5000), 2s timeout
+    Step 3 -> Both fail -> throw NO_BACKEND error
 
-    const app = express();
-    app.use(cors());
-    app.use(express.json());
+  BackendStatus.jsx catches NO_BACKEND and shows an error banner.
 
-    app.use('/api/alerts',  require('./routes/alerts'));
-    app.use('/api/sensors', require('./routes/sensors'));
-
-    connectMQTT();  // Start MQTT subscriber on boot
-
-    app.listen(5000, () =>
-      console.log('Backend running on http://localhost:5000')
-    );
-
-  KEY FILE — backend/src/services/mqttService.js:
-  -------------------------------------------------
-    const mqtt = require('mqtt');
-    const { saveReading, saveAlert } = require('../models/sensorModel');
-
-    const BROKER_URL = 'mqtt://mqtt-broker:1883';
-    const TOPIC      = 'forest/sensor/data';
-
-    // Alert thresholds
-    const SOUND_THRESHOLD     = 80;  // dB — chainsaw level
-    const VIBRATION_THRESHOLD = 7;   // arbitrary units
-
-    function connectMQTT() {
-      const client = mqtt.connect(BROKER_URL);
-
-      client.on('connect', () => {
-        client.subscribe(TOPIC);
-        console.log('MQTT connected, subscribed to:', TOPIC);
-      });
-
-      client.on('message', async (topic, message) => {
-        const data = JSON.parse(message.toString());
-        const isAlert =
-          data.sound_db    > SOUND_THRESHOLD ||
-          data.vibration   > VIBRATION_THRESHOLD;
-
-        await saveReading({ ...data, is_alert: isAlert });
-        if (isAlert) await saveAlert(data);
-      });
-    }
-
-    module.exports = { connectMQTT };
-
-  KEY FILE — backend/.env:
-  -------------------------
-    PORT=5000
-    DATABASE_URL=postgresql://user:password@db-host:5432/logging_db
-    SUPABASE_URL=https://your-project.supabase.co
-    SUPABASE_KEY=your-anon-key
-    MQTT_BROKER=mqtt://mqtt-broker:1883
+  Frontend .env:
+    VITE_API_URL_CLOUD=https://your-app.onrender.com/api
+    VITE_API_URL_LOCAL=http://localhost:5000/api
 
 
 ---------------------------------------------------------------------
-6. FRONTEND SETUP (React.js + Vite)
+6. VERCEL FRONTEND DEPLOYMENT
 ---------------------------------------------------------------------
 
-  COMMANDS:
-    cd frontend
-    npm create vite@latest . -- --template react
-    npm install axios react-router-dom leaflet react-leaflet
+  Vercel is the recommended frontend host (free, fast, GitHub-linked).
 
-  KEY FILE — frontend/src/services/api.js:
-  -----------------------------------------
-    import axios from 'axios';
+  SETUP:
+    1. Go to https://vercel.com -> New Project
+    2. Import your GitHub repo (SmartForest)
+    3. Set Root Directory = frontend
+    4. Framework Preset = Vite
+    5. Add environment variables:
+         VITE_API_URL_CLOUD  = https://your-app.onrender.com/api
+         VITE_API_URL_LOCAL  = http://localhost:5000/api
+    6. Deploy
 
-    const API = axios.create({
-      baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api'
-    });
+  AUTO-DEPLOY:
+    Vercel watches your GitHub main branch.
+    Every push to main -> Vercel rebuilds and redeploys frontend.
+    Since CI auto-merges develop->main, the full pipeline is:
+      git push develop -> CI tests -> merge to main -> Vercel deploys
 
-    export const getAlerts  = () => API.get('/alerts');
-    export const getSensors = () => API.get('/sensors');
-
-  KEY FILE — frontend/.env:
-  --------------------------
-    VITE_API_URL=http://localhost:5000/api
-
-  MAIN PAGES:
-    - Dashboard.jsx   → Shows live sensor status + alerts count
-    - ForestMap.jsx   → Leaflet map with sensor pins (red = alert)
-    - AlertsTable.jsx → Paginated table of all triggered alerts
-    - Login.jsx       → Ranger login (Supabase Auth)
+  vercel.json (in frontend folder):
+    Configures SPA routing so React Router works on direct URL loads.
 
 
 ---------------------------------------------------------------------
-7. MQTT SIMULATOR SETUP (Python)
+7. GIT & GITHUB WORKFLOW
 ---------------------------------------------------------------------
 
-  PURPOSE:
-    Replaces physical IoT sensors during development and testing.
-    Publishes fake sensor data every 5 seconds to the MQTT broker.
-    Occasionally spikes sound/vibration values to trigger alerts.
+  BRANCHES:
+    develop -> your daily local branch
+    main    -> production (GitHub), auto-merged after CI passes
 
-  COMMANDS:
-    cd simulator
-    pip install paho-mqtt
-
-  KEY FILE — simulator/mqtt_simulator.py:
-  ----------------------------------------
-    import paho.mqtt.client as mqtt
-    import json, random, time
-    from datetime import datetime
-
-    BROKER   = "localhost"
-    PORT     = 1883
-    TOPIC    = "forest/sensor/data"
-
-    ZONES = [
-      {"zone": "Kibiti-North", "lat": -7.72, "lng": 38.95},
-      {"zone": "Kibiti-South", "lat": -7.85, "lng": 38.88},
-      {"zone": "Kibiti-East",  "lat": -7.78, "lng": 39.05},
-    ]
-
-    client = mqtt.Client()
-    client.connect(BROKER, PORT)
-
-    print("Simulator started. Publishing sensor data...")
-
-    while True:
-        zone = random.choice(ZONES)
-
-        # 20% chance of a suspicious spike (simulates chainsaw)
-        spike = random.random() < 0.2
-
-        payload = {
-          "device_id"  : f"SENSOR-{random.randint(1,5):03d}",
-          "timestamp"  : datetime.utcnow().isoformat(),
-          "zone"       : zone["zone"],
-          "latitude"   : zone["lat"] + random.uniform(-0.01, 0.01),
-          "longitude"  : zone["lng"] + random.uniform(-0.01, 0.01),
-          "sound_db"   : round(random.uniform(82, 98) if spike
-                               else random.uniform(20, 60), 2),
-          "vibration"  : round(random.uniform(7.5, 10) if spike
-                               else random.uniform(0, 5), 2),
-        }
-
-        client.publish(TOPIC, json.dumps(payload))
-        print(f"Published: {payload['zone']} | "
-              f"Sound: {payload['sound_db']} dB | "
-              f"Spike: {spike}")
-        time.sleep(5)
-
-  simulator/requirements.txt:
-  ----------------------------
-    paho-mqtt==2.1.0
-
-
----------------------------------------------------------------------
-8. DOCKER COMPOSE SETUP
----------------------------------------------------------------------
-
-  KEY FILE — docker-compose.yml:
-  --------------------------------
-    version: '3.8'
-
-    services:
-
-      backend:
-        build: ./backend
-        ports:
-          - "5000:5000"
-        env_file: ./backend/.env
-        depends_on:
-          - mqtt-broker
-        restart: unless-stopped
-
-      frontend:
-        build: ./frontend
-        ports:
-          - "3000:3000"
-        depends_on:
-          - backend
-        restart: unless-stopped
-
-      mqtt-broker:
-        image: eclipse-mosquitto:2
-        ports:
-          - "1883:1883"
-        volumes:
-          - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
-        restart: unless-stopped
-
-      simulator:
-        build: ./simulator
-        depends_on:
-          - mqtt-broker
-        restart: unless-stopped
-
-  NOTE: Supabase is cloud-hosted, so no local DB container needed.
-        The backend connects to Supabase via DATABASE_URL in .env
-
-  mosquitto.conf (place in project root):
-  ----------------------------------------
-    listener 1883
-    allow_anonymous true
-
-
----------------------------------------------------------------------
-9. GIT & GITHUB SETUP
----------------------------------------------------------------------
-
-  STEP 1 — Initialize Git locally:
+  INITIAL SETUP:
     git init
     git add .
-    git commit -m "Initial project setup"
+    git commit -m "chore: initial project structure"
+    git remote add origin https://github.com/YOUR/SmartForest.git
+    git branch -M develop
+    git push -u origin develop
+    git push origin develop:main   # create main on GitHub too
 
-  STEP 2 — Create repo on GitHub:
-    Go to https://github.com → New Repository
-    Name: illegal-logging-detection
-    Visibility: Private (recommended for academic project)
-
-  STEP 3 — Push to GitHub:
-    git remote add origin https://github.com/YOUR_USERNAME/illegal-logging-detection.git
-    git branch -M main
-    git push -u origin main
-
-  BRANCHING STRATEGY:
-    main         → stable, production-ready code only
-    develop      → daily integration branch
-    feature/xxx  → new feature branches (branched from develop)
-    fix/xxx      → bug fix branches
-
-  DAILY WORKFLOW:
-    git checkout develop
-    git checkout -b feature/sensor-alert-logic
-    # ... write code ...
+  DAILY:
     git add .
-    git commit -m "feat: add sound threshold alert logic"
-    git push origin feature/sensor-alert-logic
-    # Open Pull Request on GitHub: feature → develop
+    git commit -m "feat: add sensor alert route"
+    git push origin develop
+    -> GitHub Actions fires automatically
+    -> All tests pass -> develop auto-merged into main
+    -> Vercel sees main updated -> frontend redeployed
 
-  COMMIT MESSAGE FORMAT:
-    feat:     new feature
-    fix:      bug fix
-    docs:     documentation
-    test:     adding tests
-    chore:    config/setup changes
+  COMMIT FORMAT:
+    feat:  new feature
+    fix:   bug fix
+    docs:  documentation
+    test:  tests only
+    chore: config/setup
+    ci:    CI pipeline change
 
-    Examples:
-      "feat: add MQTT subscriber to backend"
-      "fix: correct alert threshold calculation"
-      "docs: update README with setup instructions"
-
-
----------------------------------------------------------------------
-10. GITHUB ACTIONS CI/CD PIPELINE
----------------------------------------------------------------------
-
-  FILE — .github/workflows/ci.yml:
-  ----------------------------------
-    name: CI Pipeline
-
-    on:
-      push:
-        branches: [main, develop]
-      pull_request:
-        branches: [main, develop]
-
-    jobs:
-
-      test-backend:
-        runs-on: ubuntu-latest
-        steps:
-          - uses: actions/checkout@v4
-
-          - name: Setup Node.js
-            uses: actions/setup-node@v4
-            with:
-              node-version: '20'
-              cache: 'npm'
-              cache-dependency-path: backend/package-lock.json
-
-          - name: Install backend dependencies
-            working-directory: ./backend
-            run: npm ci
-
-          - name: Run backend tests
-            working-directory: ./backend
-            run: npm test
-
-      test-simulator:
-        runs-on: ubuntu-latest
-        steps:
-          - uses: actions/checkout@v4
-
-          - name: Setup Python
-            uses: actions/setup-python@v5
-            with:
-              python-version: '3.11'
-
-          - name: Install simulator dependencies
-            run: pip install paho-mqtt pytest
-
-          - name: Run simulator tests
-            run: pytest simulator/tests/ -v
-
-      docker-build:
-        runs-on: ubuntu-latest
-        needs: [test-backend, test-simulator]
-        steps:
-          - uses: actions/checkout@v4
-
-          - name: Build all Docker images
-            run: docker compose build
-
-          - name: Smoke test services
-            run: |
-              docker compose up -d mqtt-broker backend
-              sleep 10
-              curl --fail http://localhost:5000/api/alerts || exit 1
-              docker compose down
-
-  HOW IT WORKS:
-    - Every push to main or develop triggers the pipeline
-    - Every Pull Request triggers tests automatically
-    - If any test fails, the merge is blocked
-    - Docker build confirms all containers start correctly
+  GitHub Secrets needed (Settings > Secrets > Actions):
+    VITE_API_URL_CLOUD  your Render backend URL
 
 
 ---------------------------------------------------------------------
-11. STEP-BY-STEP DEVELOPMENT ORDER
+8. MQTT SIMULATOR - LOCAL vs CLOUD
 ---------------------------------------------------------------------
 
-  Phase 1 — Environment Setup (Week 1)
-    [ ] Install all prerequisite software
-    [ ] Create Supabase project and database tables
-    [ ] Initialize Git repo and push to GitHub
-    [ ] Set up Docker Compose with MQTT broker running
+  LOCAL (recommended during development):
+    cd simulator
+    python3 -m venv venv
+    source venv/bin/activate
+    pip install -r requirements.txt
+    python mqtt_simulator.py
 
-  Phase 2 — Backend Core (Week 2)
-    [ ] Express.js app skeleton with CORS and routing
-    [ ] PostgreSQL connection via Supabase
-    [ ] MQTT subscriber service
-    [ ] POST /api/sensors → save reading to DB
-    [ ] GET  /api/alerts  → fetch alerts from DB
+  CLOUD HOSTING OPTIONS (when you want it always running):
 
-  Phase 3 — IoT Simulation (Week 3)
-    [ ] Python MQTT simulator script
-    [ ] Verify data flows: Simulator → MQTT → Backend → Supabase
-    [ ] Test alert threshold triggering
+    Option A: Railway.app (easiest)
+      1. https://railway.app -> New Project -> GitHub repo
+      2. Root directory: /simulator
+      3. Railway auto-detects Dockerfile and deploys
+      4. Set env: MQTT_BROKER_HOST=your-hivemq-host
 
-  Phase 4 — Frontend Dashboard (Week 4)
-    [ ] React app with Vite
-    [ ] Dashboard page with live alerts counter
-    [ ] Leaflet map showing sensor zones
-    [ ] Alerts table with auto-refresh (polling every 10s)
+    Option B: Render.com (Background Worker)
+      1. New -> Background Worker -> connect GitHub repo
+      2. Root: /simulator
+      3. Build: pip install -r requirements.txt
+      4. Start: python mqtt_simulator.py
 
-  Phase 5 — Notifications (Week 5)
-    [ ] Email alert on trigger (Nodemailer or Supabase Edge Functions)
-    [ ] Alert status update (mark as resolved)
-
-  Phase 6 — Testing & CI/CD (Week 6)
-    [ ] Unit tests for alert threshold logic (Jest)
-    [ ] API integration tests (Supertest)
-    [ ] GitHub Actions pipeline for automated testing
-    [ ] Final Docker Compose smoke test
-
-  Phase 7 — Documentation (Week 7)
-    [ ] README.md with full setup instructions
-    [ ] API documentation (list all endpoints)
-    [ ] System architecture diagram
-    [ ] Final report writing
+  IMPORTANT: Cloud simulator needs a cloud-accessible MQTT broker.
+  Use HiveMQ Cloud free tier: https://www.hivemq.com/mqtt-cloud-broker/
+  Both Render backend and Railway simulator connect to HiveMQ.
 
 
 ---------------------------------------------------------------------
-12. KEY API ENDPOINTS REFERENCE
+9. KEY API ENDPOINTS
 ---------------------------------------------------------------------
 
-  Method  | Endpoint                | Description
-  --------|-------------------------|------------------------------
-  GET     | /api/alerts             | Get all alerts
-  GET     | /api/alerts/:id         | Get single alert
-  PATCH   | /api/alerts/:id/resolve | Mark alert as resolved
-  GET     | /api/sensors            | Get all sensor readings
-  GET     | /api/sensors/live       | Get latest reading per device
-  POST    | /api/sensors            | Manually post sensor data
-                                     (for testing without MQTT)
-
-
----------------------------------------------------------------------
-13. QUICK START COMMANDS (AFTER SETUP)
----------------------------------------------------------------------
-
-  # 1. Start all backend services (broker + backend + frontend)
-  docker compose up --build
-
-  # 2. In a separate terminal, start the IoT simulator
-  cd simulator && python mqtt_simulator.py
-
-  # 3. Watch incoming data in backend logs
-  docker compose logs -f backend
-
-  # 4. Test the alerts API manually
-  curl http://localhost:5000/api/alerts
-
-  # 5. View the dashboard
-  Open browser → http://localhost:3000
-
-  # 6. Monitor MQTT messages directly (debugging)
-  mosquitto_sub -h localhost -t "forest/sensor/data"
+  Method  Endpoint                   Description
+  ------  -------------------------  --------------------------------
+  GET     /api/health                Is backend alive? (no auth)
+  POST    /api/auth/login            Ranger login -> JWT token
+  POST    /api/auth/logout           Invalidate session
+  GET     /api/alerts                All alerts (auth required)
+  GET     /api/alerts/:id            Single alert detail
+  PATCH   /api/alerts/:id/resolve    Mark alert as resolved
+  GET     /api/sensors               All sensor readings
+  GET     /api/sensors/live          Latest reading per device
+  POST    /api/sensors               Manual sensor post (testing)
 
 
 ---------------------------------------------------------------------
-13. .gitignore FILE
+10. QUICK START - LOCAL DEVELOPMENT
 ---------------------------------------------------------------------
 
-  node_modules/
-  __pycache__/
-  *.pyc
-  .env
-  .env.local
-  dist/
-  build/
-  *.log
-  .DS_Store
-  coverage/
+  Terminal 1: MQTT Broker
+    sudo apt install mosquitto -y
+    mosquitto -c mosquitto.conf
 
+  Terminal 2: Backend
+    cd backend
+    cp .env.example .env   <- fill in Supabase creds
+    npm install
+    npm run dev            -> http://localhost:5000
+
+  Terminal 3: Frontend
+    cd frontend
+    cp .env.example .env
+    npm install
+    npm run dev            -> http://localhost:5173
+
+  Terminal 4: Simulator
+    cd simulator
+    source venv/bin/activate
+    python mqtt_simulator.py
+
+  Open http://localhost:5173 and watch live alerts appear!
+
+
+---------------------------------------------------------------------
+11. FULL DEPLOYMENT PIPELINE (end to end)
+---------------------------------------------------------------------
+
+  1. Write code locally on 'develop' branch
+  2. git push origin develop
+  3. GitHub Actions runs:
+       - Backend Jest tests
+       - Frontend lint + Vite build
+       - Simulator pytest tests
+       - Docker build check
+  4. ALL PASS -> develop auto-merged into main
+  5. Render.com detects main change -> redeploys backend
+  6. Vercel detects main change -> redeploys frontend
+  7. Production is live with new code
 
 =====================================================================
-  END OF PROJECT SETUP SUMMARY
-  System: Web-Based Illegal Logging Detection — Kibiti, Tanzania
+  END OF SETUP SUMMARY
+  SmartForest - Protecting Kibiti Forest, Tanzania
 =====================================================================

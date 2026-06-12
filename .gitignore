@@ -6,10 +6,12 @@ venv/
 .env
 .env.local
 .env.production
+.env.*.local
 
 # Build outputs
 dist/
 build/
+.vercel/
 
 # Python
 __pycache__/
@@ -26,3 +28,7 @@ Thumbs.db
 
 # Coverage
 coverage/
+
+# Editor
+.vscode/
+.idea/
