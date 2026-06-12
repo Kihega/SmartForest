@@ -7,7 +7,14 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "test": "jest --forceExit"
+    "test": "jest",
+    "test:verbose": "jest --verbose"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "forceExit": true,
+    "silent": true,
+    "testTimeout": 10000
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.0",
