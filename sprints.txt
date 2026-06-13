@@ -1,0 +1,372 @@
+# SmartForest — Agile Development Sprints
+
+**Project:** Web-Based System for Detecting Illegal Logging Activities
+**Methodology:** Agile (Scrum-inspired, solo developer)
+**Sprint Length:** 1 week per sprint
+**Branch Strategy:** develop (work) -> main (production via CI/CD)
+**Start Date:** June 2026
+
+---
+
+## Sprint Overview
+
+| Sprint | Focus                        | Status      |
+|--------|------------------------------|-------------|
+| 0      | Project Setup & CI/CD        | DONE        |
+| 1      | Database & Backend Core      | IN PROGRESS |
+| 2      | MQTT & Sensor Ingest         | PENDING     |
+| 3      | Auth & Security              | PENDING     |
+| 4      | Frontend Dashboard           | PENDING     |
+| 5      | Map & Real-Time Alerts       | PENDING     |
+| 6      | Notifications & Reporting    | PENDING     |
+| 7      | Testing & Hardening          | PENDING     |
+| 8      | Deployment & Documentation   | PENDING     |
+
+---
+
+## Sprint 0 — Project Setup & CI/CD
+**Duration:** Week 1 | **Status:** DONE
+
+**Goal:** Working skeleton with automated pipeline.
+
+### Completed
+- [x] Initialize Git repo with develop/main branch strategy
+- [x] Define full folder structure (backend, frontend, simulator, database)
+- [x] Set up Express.js backend skeleton
+- [x] Set up React/Vite frontend skeleton
+- [x] Set up Python MQTT simulator
+- [x] Write 14 passing backend tests (Jest + Supertest)
+- [x] Configure GitHub Actions CI/CD pipeline
+- [x] Auto-merge develop -> main on all tests passing
+- [x] Configure Supabase project and credentials
+- [x] Deploy backend to Render.com
+- [x] Deploy frontend to Vercel
+
+### Definition of Done
+- CI pipeline runs green on every push to develop
+- develop auto-merges to main after all tests pass
+- /api/health returns 200 on Render cloud URL
+
+---
+
+## Sprint 1 — Database Models & Backend Core
+**Duration:** Week 2 | **Status:** IN PROGRESS
+
+**Goal:** Backend can read and write real data to Supabase.
+
+### User Stories
+- As a system, I want to save sensor readings to the database
+  so that historical data is preserved for analysis.
+- As a ranger, I want to retrieve all alerts from the API
+  so that I can see what incidents have been detected.
+- As a developer, I want DB queries abstracted into model files
+  so that routes stay clean and testable.
+
+### Tasks
+- [ ] Implement sensorModel.js
+      - saveReading(data) -> INSERT into sensor_readings
+      - getAll()          -> SELECT all readings
+      - getLive()         -> SELECT latest per device_id
+- [ ] Implement alertModel.js
+      - create(data)      -> INSERT into alerts
+      - getAll()          -> SELECT all alerts ORDER BY created_at DESC
+      - getById(id)       -> SELECT single alert
+      - resolve(id)       -> UPDATE status = resolved
+- [ ] Implement userModel.js
+      - getByEmail(email) -> SELECT user by email
+      - create(data)      -> INSERT new user profile
+- [ ] Wire routes to models
+      - GET  /api/sensors      -> sensorModel.getAll()
+      - GET  /api/sensors/live -> sensorModel.getLive()
+      - POST /api/sensors      -> sensorModel.saveReading()
+      - GET  /api/alerts       -> alertModel.getAll()
+      - GET  /api/alerts/:id   -> alertModel.getById()
+      - PATCH /api/alerts/:id/resolve -> alertModel.resolve()
+- [ ] Implement errorHandler.js middleware
+- [ ] Update tests to verify real DB responses
+- [ ] Run database migrations on Supabase
+
+### Patch File
+    python3 patch_db_models.py
+
+### Definition of Done
+- All routes return real data from Supabase (not empty arrays)
+- POST /api/sensors saves a row visible in Supabase dashboard
+- All 14+ tests still pass after wiring DB
+- CI pipeline stays green
+
+---
+
+## Sprint 2 — MQTT Ingest & Alert Detection
+**Duration:** Week 3 | **Status:** PENDING
+
+**Goal:** System automatically detects and stores alerts from sensor data.
+
+### User Stories
+- As a forest sensor, I want to publish readings via MQTT
+  so that the backend receives them in real time.
+- As the system, I want to auto-detect suspicious readings
+  so that alerts are created without manual intervention.
+- As a ranger, I want to be notified the moment an alert fires
+  so that response time is minimized.
+
+### Tasks
+- [ ] Wire mqttService.js to call sensorModel.saveReading()
+- [ ] Implement alertService.js
+      - evaluateReading(data) -> check thresholds
+      - if alert: call alertModel.create()
+      - deduplicate: skip if same device alerted in last 5 min
+- [ ] Wire mqttService -> alertService
+- [ ] Start and test MQTT simulator locally
+      - mosquitto -c mosquitto.conf
+      - cd simulator && python mqtt_simulator.py
+      - verify readings appear in Supabase dashboard
+- [ ] Add MQTT integration test (mock broker)
+
+### Patch File
+    python3 patch_mqtt_ingest.py
+
+### Definition of Done
+- Simulator running -> readings appear in sensor_readings table
+- Sound > 80dB or vibration > 7 -> row appears in alerts table
+- Duplicate alerts within 5 minutes are suppressed
+
+---
+
+## Sprint 3 — Authentication & Authorization
+**Duration:** Week 4 | **Status:** PENDING
+
+**Goal:** Only authenticated rangers can access the system.
+
+### User Stories
+- As a ranger, I want to log in with my email and password
+  so that I can access the monitoring dashboard securely.
+- As the system, I want to reject unauthenticated API requests
+  so that sensor data is not publicly accessible.
+- As an admin, I want different roles (admin, ranger)
+  so that only admins can manage users.
+
+### Tasks
+- [ ] Implement POST /api/auth/login using Supabase Auth
+      - signInWithPassword(email, password)
+      - return JWT access_token + user profile
+- [ ] Implement POST /api/auth/logout
+      - supabase.auth.signOut()
+- [ ] Implement GET /api/auth/me
+      - verify token, return current user
+- [ ] Implement authMiddleware.js
+      - extract Bearer token from Authorization header
+      - verify with Supabase JWT secret
+      - attach user to req.user
+      - return 401 if invalid/missing
+- [ ] Protect routes: apply authMiddleware to alerts + sensors
+- [ ] Update auth tests to cover login/logout/protected routes
+- [ ] Implement AuthContext.jsx in frontend
+
+### Patch File
+    python3 patch_auth.py
+
+### Definition of Done
+- GET /api/alerts without token returns 401
+- POST /api/auth/login with valid creds returns JWT
+- GET /api/alerts with valid JWT returns data
+- Frontend stores and sends JWT on every request
+
+---
+
+## Sprint 4 — Frontend Dashboard
+**Duration:** Week 5 | **Status:** PENDING
+
+**Goal:** Rangers can log in and see live sensor data on a dashboard.
+
+### User Stories
+- As a ranger, I want a login screen so I can authenticate.
+- As a ranger, I want a dashboard showing all active sensors
+  so I can see which zones are being monitored.
+- As a ranger, I want the alerts table to update automatically
+  so I don't have to refresh the page manually.
+
+### Tasks
+- [ ] Implement Login.jsx (email + password form)
+- [ ] Implement useBackend.js hook (resolve cloud vs local)
+- [ ] Implement BackendStatus.jsx (error banner)
+- [ ] Implement Dashboard.jsx layout
+      - summary cards: total alerts, active sensors, unresolved
+- [ ] Implement SensorCard.jsx
+      - show device_id, zone, last reading, status indicator
+- [ ] Implement AlertsTable.jsx
+      - columns: time, zone, device, sound_db, vibration, status
+      - auto-refresh every 10 seconds (useAlerts hook)
+- [ ] Implement Navbar.jsx (logo, user info, logout button)
+- [ ] Implement useSensors.js and useAlerts.js hooks
+- [ ] Connect frontend .env to Render backend URL
+
+### Patch File
+    python3 patch_frontend_dashboard.py
+
+### Definition of Done
+- Login page works with Supabase credentials
+- Dashboard loads and shows sensor cards
+- Alerts table auto-refreshes every 10 seconds
+- BackendStatus banner shows when backend is unreachable
+
+---
+
+## Sprint 5 — Forest Map & Real-Time Alerts
+**Duration:** Week 6 | **Status:** PENDING
+
+**Goal:** Visual map showing sensor locations with live alert pins.
+
+### User Stories
+- As a ranger, I want to see sensor locations on a map
+  so that I know exactly where in the forest to respond.
+- As a ranger, I want alert pins to turn red on the map
+  so that I can immediately identify danger zones.
+
+### Tasks
+- [ ] Install and configure Leaflet + react-leaflet
+- [ ] Implement ForestMap.jsx
+      - render OpenStreetMap tiles centered on Kibiti (-7.78, 38.95)
+      - green pin = normal sensor reading
+      - red pin = active unresolved alert
+      - popup on click: device_id, sound_db, vibration, timestamp
+- [ ] Implement AlertContext.jsx (global alert state)
+- [ ] Add map view to Dashboard.jsx
+- [ ] Test map renders correctly on mobile screen sizes
+
+### Patch File
+    python3 patch_map.py
+
+### Definition of Done
+- Map renders Kibiti region with sensor pins
+- Alert pins turn red within 10 seconds of alert firing
+- Clicking a pin shows sensor details popup
+
+---
+
+## Sprint 6 — Notifications & Reporting
+**Duration:** Week 7 | **Status:** PENDING
+
+**Goal:** Authorities are notified immediately when illegal activity detected.
+
+### User Stories
+- As a ranger, I want an email when an alert fires
+  so that I am notified even when not watching the dashboard.
+- As an admin, I want to download a report of all alerts
+  so that I can submit evidence to authorities.
+
+### Tasks
+- [ ] Implement notificationService.js using Nodemailer
+      - sendAlertEmail(alert) on every new alert
+      - configure SMTP via environment variables
+- [ ] Implement GET /api/reports/alerts (CSV export)
+      - query all alerts in date range
+      - return as downloadable CSV
+- [ ] Add download button to AlertsTable.jsx
+- [ ] Add AlertDetail.jsx page
+      - show full alert info + resolve button
+- [ ] Add PATCH /api/alerts/:id/resolve to mark resolved
+
+### Patch File
+    python3 patch_notifications.py
+
+### Definition of Done
+- Email received within 30 seconds of simulator triggering alert
+- CSV export downloads all alerts with correct columns
+- Resolved alerts show different status in dashboard
+
+---
+
+## Sprint 7 — Testing & Hardening
+**Duration:** Week 8 | **Status:** PENDING
+
+**Goal:** System is robust, secure, and fully tested.
+
+### User Stories
+- As a developer, I want full test coverage
+  so that regressions are caught automatically.
+- As a user, I want the system to handle errors gracefully
+  so that crashes don't leave rangers without monitoring.
+
+### Tasks
+- [ ] Increase test coverage to 80%+ on all backend routes
+- [ ] Add input validation middleware (express-validator)
+- [ ] Add rate limiting (express-rate-limit) on auth routes
+- [ ] Add helmet.js for security headers
+- [ ] Test all frontend components (React Testing Library)
+- [ ] End-to-end test: simulator -> MQTT -> DB -> frontend
+- [ ] Load test: simulate 10 sensors sending data simultaneously
+- [ ] Fix any bugs found during testing
+
+### Patch File
+    python3 patch_hardening.py
+
+### Definition of Done
+- npm test shows 80%+ coverage
+- All security headers present (checked via securityheaders.com)
+- System handles 10 concurrent sensors without errors
+
+---
+
+## Sprint 8 — Deployment & Documentation
+**Duration:** Week 9 | **Status:** PENDING
+
+**Goal:** System is live, documented, and ready for handover.
+
+### User Stories
+- As a stakeholder, I want a live working system
+  so that forest rangers in Kibiti can start using it.
+- As a future developer, I want full documentation
+  so that I can maintain and extend the system.
+
+### Tasks
+- [ ] Verify full cloud deployment (Render + Vercel + Supabase)
+- [ ] Configure custom domain (if available)
+- [ ] Run final SQL migrations on production Supabase
+- [ ] Create admin user account in Supabase Auth
+- [ ] Write final README.md with full setup instructions
+- [ ] Write API documentation (all endpoints with examples)
+- [ ] Write system architecture diagram (draw.io or Mermaid)
+- [ ] Record a demo video walkthrough
+- [ ] Write project report (maps to academic submission)
+
+### Definition of Done
+- https://smartforest.vercel.app loads and works end-to-end
+- Ranger can log in, see the map, and receive an alert
+  triggered by the simulator within 10 seconds
+- All documentation complete and committed to repo
+
+---
+
+## Patch Files Reference
+
+| Patch File                    | Sprint | Purpose                          |
+|-------------------------------|--------|----------------------------------|
+| patch.py                      | 0      | Initial project structure        |
+| patch_tests.py                | 0      | Add real Jest tests              |
+| patch_test_cleanup.py         | 0      | Fix Jest teardown warnings       |
+| patch_ci_fix.py               | 0      | Fix auto-merge permissions       |
+| patch_sprints.py              | 0      | This file                        |
+| patch_db_models.py            | 1      | Implement DB models + wire routes|
+| patch_mqtt_ingest.py          | 2      | Wire MQTT to DB + alert logic    |
+| patch_auth.py                 | 3      | Supabase Auth + JWT middleware   |
+| patch_frontend_dashboard.py   | 4      | React dashboard + components     |
+| patch_map.py                  | 5      | Leaflet map + alert pins         |
+| patch_notifications.py        | 6      | Email alerts + CSV export        |
+| patch_hardening.py            | 7      | Security + validation + coverage |
+
+---
+
+## How to Update This File
+
+When you finish a task, change `[ ]` to `[x]`:
+```bash
+nano SPRINTS.md
+# edit the checkboxes
+git add SPRINTS.md
+git commit -m "chore: update sprint progress"
+git push origin develop
+```
+
+When starting a new sprint, update its Status from PENDING to IN PROGRESS.
+When complete, update to DONE.
