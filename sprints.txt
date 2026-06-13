@@ -8,19 +8,32 @@
 
 ---
 
+## Notification Strategy
+
+Alerts are delivered via the **web dashboard only** (no email).
+Rangers monitoring the dashboard see alerts in real time through:
+- Auto-refreshing AlertsTable (polls every 10 seconds)
+- Red alert badge counter on the Navbar
+- New alert rows highlighted in red with fade-in animation
+- Browser Web Notification (popup) when a new alert arrives
+- Audio beep sound on new alert (optional, can be toggled off)
+
+---
+
 ## Sprint Overview
 
-| Sprint | Focus                        | Status      |
-|--------|------------------------------|-------------|
-| 0      | Project Setup & CI/CD        | DONE        |
-| 1      | Database & Backend Core      | IN PROGRESS |
-| 2      | MQTT & Sensor Ingest         | PENDING     |
-| 3      | Auth & Security              | PENDING     |
-| 4      | Frontend Dashboard           | PENDING     |
-| 5      | Map & Real-Time Alerts       | PENDING     |
-| 6      | Notifications & Reporting    | PENDING     |
-| 7      | Testing & Hardening          | PENDING     |
-| 8      | Deployment & Documentation   | PENDING     |
+| Sprint | Focus                           | Status      |
+|--------|---------------------------------|-------------|
+| 0      | Project Setup & CI/CD           | DONE        |
+| 1      | Database Models & Backend Core  | IN PROGRESS |
+| 2      | MQTT & Sensor Ingest            | PENDING     |
+| 3      | Auth & Security                 | PENDING     |
+| 4      | Frontend Dashboard              | PENDING     |
+| 5      | Map & Real-Time Alerts          | PENDING     |
+| 6      | Dashboard Notifications         | PENDING     |
+| 7      | Reporting & Alert Management    | PENDING     |
+| 8      | Testing & Hardening             | PENDING     |
+| 9      | Deployment & Documentation      | PENDING     |
 
 ---
 
@@ -31,7 +44,7 @@
 
 ### Completed
 - [x] Initialize Git repo with develop/main branch strategy
-- [x] Define full folder structure (backend, frontend, simulator, database)
+- [x] Define full folder structure
 - [x] Set up Express.js backend skeleton
 - [x] Set up React/Vite frontend skeleton
 - [x] Set up Python MQTT simulator
@@ -39,12 +52,12 @@
 - [x] Configure GitHub Actions CI/CD pipeline
 - [x] Auto-merge develop -> main on all tests passing
 - [x] Configure Supabase project and credentials
+- [x] Create backend/.env with all credentials
 - [x] Deploy backend to Render.com
 - [x] Deploy frontend to Vercel
 
 ### Definition of Done
 - CI pipeline runs green on every push to develop
-- develop auto-merges to main after all tests pass
 - /api/health returns 200 on Render cloud URL
 
 ---
@@ -52,48 +65,51 @@
 ## Sprint 1 — Database Models & Backend Core
 **Duration:** Week 2 | **Status:** IN PROGRESS
 
-**Goal:** Backend can read and write real data to Supabase.
+**Goal:** Backend reads and writes real data to Supabase.
 
 ### User Stories
 - As a system, I want to save sensor readings to the database
-  so that historical data is preserved for analysis.
-- As a ranger, I want to retrieve all alerts from the API
-  so that I can see what incidents have been detected.
-- As a developer, I want DB queries abstracted into model files
+  so that all historical data is preserved.
+- As a ranger, I want to retrieve alerts from the API
+  so that the dashboard can display them.
+- As a developer, I want DB queries in model files
   so that routes stay clean and testable.
 
 ### Tasks
 - [ ] Implement sensorModel.js
-      - saveReading(data) -> INSERT into sensor_readings
-      - getAll()          -> SELECT all readings
-      - getLive()         -> SELECT latest per device_id
+      saveReading(data)  -> INSERT into sensor_readings
+      getAll()           -> SELECT all readings
+      getLive()          -> SELECT latest per device_id
 - [ ] Implement alertModel.js
-      - create(data)      -> INSERT into alerts
-      - getAll()          -> SELECT all alerts ORDER BY created_at DESC
-      - getById(id)       -> SELECT single alert
-      - resolve(id)       -> UPDATE status = resolved
+      create(data)       -> INSERT into alerts
+      getAll()           -> SELECT all ORDER BY created_at DESC
+      getById(id)        -> SELECT single alert
+      resolve(id)        -> UPDATE status = resolved
+      getUnresolved()    -> SELECT where status = unresolved
+      countUnresolved()  -> COUNT for navbar badge
 - [ ] Implement userModel.js
-      - getByEmail(email) -> SELECT user by email
-      - create(data)      -> INSERT new user profile
+      getByEmail(email)  -> SELECT user by email
+      create(data)       -> INSERT new user profile
 - [ ] Wire routes to models
-      - GET  /api/sensors      -> sensorModel.getAll()
-      - GET  /api/sensors/live -> sensorModel.getLive()
-      - POST /api/sensors      -> sensorModel.saveReading()
-      - GET  /api/alerts       -> alertModel.getAll()
-      - GET  /api/alerts/:id   -> alertModel.getById()
-      - PATCH /api/alerts/:id/resolve -> alertModel.resolve()
+      GET  /api/sensors        -> sensorModel.getAll()
+      GET  /api/sensors/live   -> sensorModel.getLive()
+      POST /api/sensors        -> sensorModel.saveReading()
+      GET  /api/alerts         -> alertModel.getAll()
+      GET  /api/alerts/count   -> alertModel.countUnresolved()
+      GET  /api/alerts/:id     -> alertModel.getById()
+      PATCH /api/alerts/:id/resolve -> alertModel.resolve()
 - [ ] Implement errorHandler.js middleware
+- [ ] Run SQL migrations on Supabase
 - [ ] Update tests to verify real DB responses
-- [ ] Run database migrations on Supabase
 
 ### Patch File
     python3 patch_db_models.py
 
 ### Definition of Done
-- All routes return real data from Supabase (not empty arrays)
 - POST /api/sensors saves a row visible in Supabase dashboard
-- All 14+ tests still pass after wiring DB
-- CI pipeline stays green
+- GET /api/alerts returns real rows (not empty array)
+- GET /api/alerts/count returns unresolved alert number
+- All 14+ tests still pass
 
 ---
 
@@ -107,20 +123,16 @@
   so that the backend receives them in real time.
 - As the system, I want to auto-detect suspicious readings
   so that alerts are created without manual intervention.
-- As a ranger, I want to be notified the moment an alert fires
-  so that response time is minimized.
 
 ### Tasks
 - [ ] Wire mqttService.js to call sensorModel.saveReading()
 - [ ] Implement alertService.js
-      - evaluateReading(data) -> check thresholds
-      - if alert: call alertModel.create()
-      - deduplicate: skip if same device alerted in last 5 min
+      evaluateReading(data)  -> check sound_db and vibration
+      if alert -> call alertModel.create()
+      deduplicate: skip if same device alerted in last 5 min
 - [ ] Wire mqttService -> alertService
-- [ ] Start and test MQTT simulator locally
-      - mosquitto -c mosquitto.conf
-      - cd simulator && python mqtt_simulator.py
-      - verify readings appear in Supabase dashboard
+- [ ] Test end-to-end locally:
+      mosquitto -> simulator -> backend -> Supabase
 - [ ] Add MQTT integration test (mock broker)
 
 ### Patch File
@@ -128,7 +140,7 @@
 
 ### Definition of Done
 - Simulator running -> readings appear in sensor_readings table
-- Sound > 80dB or vibration > 7 -> row appears in alerts table
+- Sound > 80dB -> row appears in alerts table automatically
 - Duplicate alerts within 5 minutes are suppressed
 
 ---
@@ -139,28 +151,18 @@
 **Goal:** Only authenticated rangers can access the system.
 
 ### User Stories
-- As a ranger, I want to log in with my email and password
-  so that I can access the monitoring dashboard securely.
-- As the system, I want to reject unauthenticated API requests
-  so that sensor data is not publicly accessible.
-- As an admin, I want different roles (admin, ranger)
-  so that only admins can manage users.
+- As a ranger, I want to log in with email and password
+  so that I can access the dashboard securely.
+- As the system, I want to reject unauthenticated API calls
+  so that data is not publicly accessible.
 
 ### Tasks
-- [ ] Implement POST /api/auth/login using Supabase Auth
-      - signInWithPassword(email, password)
-      - return JWT access_token + user profile
+- [ ] Implement POST /api/auth/login (Supabase Auth)
 - [ ] Implement POST /api/auth/logout
-      - supabase.auth.signOut()
 - [ ] Implement GET /api/auth/me
-      - verify token, return current user
-- [ ] Implement authMiddleware.js
-      - extract Bearer token from Authorization header
-      - verify with Supabase JWT secret
-      - attach user to req.user
-      - return 401 if invalid/missing
-- [ ] Protect routes: apply authMiddleware to alerts + sensors
-- [ ] Update auth tests to cover login/logout/protected routes
+- [ ] Implement authMiddleware.js (verify JWT Bearer token)
+- [ ] Protect all alert + sensor routes with authMiddleware
+- [ ] Update auth tests to cover protected routes
 - [ ] Implement AuthContext.jsx in frontend
 
 ### Patch File
@@ -170,69 +172,64 @@
 - GET /api/alerts without token returns 401
 - POST /api/auth/login with valid creds returns JWT
 - GET /api/alerts with valid JWT returns data
-- Frontend stores and sends JWT on every request
 
 ---
 
 ## Sprint 4 — Frontend Dashboard
 **Duration:** Week 5 | **Status:** PENDING
 
-**Goal:** Rangers can log in and see live sensor data on a dashboard.
+**Goal:** Rangers can log in and see live sensor data.
 
 ### User Stories
-- As a ranger, I want a login screen so I can authenticate.
-- As a ranger, I want a dashboard showing all active sensors
-  so I can see which zones are being monitored.
-- As a ranger, I want the alerts table to update automatically
-  so I don't have to refresh the page manually.
+- As a ranger, I want a login screen to authenticate.
+- As a ranger, I want a dashboard showing sensor status
+  and recent alerts so I can monitor the forest.
 
 ### Tasks
 - [ ] Implement Login.jsx (email + password form)
-- [ ] Implement useBackend.js hook (resolve cloud vs local)
-- [ ] Implement BackendStatus.jsx (error banner)
+- [ ] Implement useBackend.js (resolve cloud vs local)
+- [ ] Implement BackendStatus.jsx (no-backend error banner)
 - [ ] Implement Dashboard.jsx layout
-      - summary cards: total alerts, active sensors, unresolved
+      summary cards: total alerts, active sensors, unresolved count
 - [ ] Implement SensorCard.jsx
-      - show device_id, zone, last reading, status indicator
+      device_id, zone, last reading, green/red status dot
 - [ ] Implement AlertsTable.jsx
-      - columns: time, zone, device, sound_db, vibration, status
-      - auto-refresh every 10 seconds (useAlerts hook)
-- [ ] Implement Navbar.jsx (logo, user info, logout button)
+      columns: time, zone, device, sound_db, vibration, status
+      auto-refresh every 10s via useAlerts hook
+- [ ] Implement Navbar.jsx
+      logo, ranger name, unresolved alert badge, logout
 - [ ] Implement useSensors.js and useAlerts.js hooks
-- [ ] Connect frontend .env to Render backend URL
 
 ### Patch File
     python3 patch_frontend_dashboard.py
 
 ### Definition of Done
-- Login page works with Supabase credentials
-- Dashboard loads and shows sensor cards
+- Login works with Supabase ranger credentials
+- Dashboard loads sensor cards and alerts table
 - Alerts table auto-refreshes every 10 seconds
-- BackendStatus banner shows when backend is unreachable
 
 ---
 
-## Sprint 5 — Forest Map & Real-Time Alerts
+## Sprint 5 — Map & Real-Time Alert Pins
 **Duration:** Week 6 | **Status:** PENDING
 
 **Goal:** Visual map showing sensor locations with live alert pins.
 
 ### User Stories
-- As a ranger, I want to see sensor locations on a map
-  so that I know exactly where in the forest to respond.
-- As a ranger, I want alert pins to turn red on the map
-  so that I can immediately identify danger zones.
+- As a ranger, I want sensor locations on a map
+  so I know exactly where in the forest to respond.
+- As a ranger, I want alert pins to turn red
+  so I can immediately spot danger zones.
 
 ### Tasks
-- [ ] Install and configure Leaflet + react-leaflet
+- [ ] Install leaflet + react-leaflet
 - [ ] Implement ForestMap.jsx
-      - render OpenStreetMap tiles centered on Kibiti (-7.78, 38.95)
-      - green pin = normal sensor reading
-      - red pin = active unresolved alert
-      - popup on click: device_id, sound_db, vibration, timestamp
+      OpenStreetMap tiles centered on Kibiti (-7.78, 38.95)
+      green pin = normal, red pin = unresolved alert
+      popup: device_id, sound_db, vibration, timestamp
 - [ ] Implement AlertContext.jsx (global alert state)
-- [ ] Add map view to Dashboard.jsx
-- [ ] Test map renders correctly on mobile screen sizes
+- [ ] Add map to Dashboard.jsx
+- [ ] Test map on mobile screen sizes
 
 ### Patch File
     python3 patch_map.py
@@ -244,129 +241,167 @@
 
 ---
 
-## Sprint 6 — Notifications & Reporting
+## Sprint 6 — Dashboard Notifications
 **Duration:** Week 7 | **Status:** PENDING
 
-**Goal:** Authorities are notified immediately when illegal activity detected.
+**Goal:** Rangers are alerted instantly via the dashboard UI.
+No email — all notifications are web-based only.
 
 ### User Stories
-- As a ranger, I want an email when an alert fires
-  so that I am notified even when not watching the dashboard.
-- As an admin, I want to download a report of all alerts
-  so that I can submit evidence to authorities.
+- As a ranger watching the dashboard, I want a visible alert
+  the moment a new incident is detected so I can respond fast.
+- As a ranger, I want the page to notify me even if I am
+  on a different browser tab so I don't miss anything.
 
 ### Tasks
-- [ ] Implement notificationService.js using Nodemailer
-      - sendAlertEmail(alert) on every new alert
-      - configure SMTP via environment variables
-- [ ] Implement GET /api/reports/alerts (CSV export)
-      - query all alerts in date range
-      - return as downloadable CSV
-- [ ] Add download button to AlertsTable.jsx
-- [ ] Add AlertDetail.jsx page
-      - show full alert info + resolve button
-- [ ] Add PATCH /api/alerts/:id/resolve to mark resolved
+- [ ] Red badge counter on Navbar showing unresolved alert count
+      fetches GET /api/alerts/count every 10s
+      badge turns red and pulses when count > 0
+- [ ] New alert row highlight in AlertsTable
+      new rows flash red for 3 seconds then fade to normal
+      'NEW' badge on rows less than 1 minute old
+- [ ] Browser Web Notification (Notification API)
+      ask permission on login
+      fire popup notification when new alert detected
+      notification text: 'ALERT: [zone] - Sound [db]dB detected'
+      clicking notification focuses the browser tab
+- [ ] Audio alert beep (optional, toggle in settings)
+      short beep sound when new alert arrives
+      toggle on/off button in Navbar
+- [ ] Alert toast popup in bottom-right corner
+      appears for 5 seconds then auto-dismisses
+      shows zone, sensor, sound level
 
 ### Patch File
     python3 patch_notifications.py
 
 ### Definition of Done
-- Email received within 30 seconds of simulator triggering alert
-- CSV export downloads all alerts with correct columns
-- Resolved alerts show different status in dashboard
+- Navbar badge updates within 10 seconds of new alert
+- Browser popup notification fires when alert is created
+- Toast appears in bottom-right corner for 5 seconds
+- New alert rows highlighted red in the table
+- Audio beep fires on new alert (when toggle is ON)
 
 ---
 
-## Sprint 7 — Testing & Hardening
+## Sprint 7 — Reporting & Alert Management
 **Duration:** Week 8 | **Status:** PENDING
+
+**Goal:** Rangers can manage alerts and download reports.
+
+### User Stories
+- As a ranger, I want to mark an alert as resolved
+  so that the team knows it has been handled.
+- As an admin, I want to export all alerts as CSV
+  so I can submit evidence to authorities.
+
+### Tasks
+- [ ] Implement AlertDetail.jsx page
+      full alert info: zone, coords, sound, vibration, timestamp
+      Resolve button -> PATCH /api/alerts/:id/resolve
+      resolved alerts show green status badge
+- [ ] Implement GET /api/reports/alerts (CSV export)
+      accepts ?from=date&to=date query params
+      returns downloadable CSV file
+- [ ] Add Export CSV button to AlertsTable.jsx
+- [ ] Add filter controls to AlertsTable
+      filter by: zone, status, date range
+- [ ] Add pagination to AlertsTable (20 rows per page)
+
+### Patch File
+    python3 patch_reporting.py
+
+### Definition of Done
+- Resolve button updates alert status in Supabase
+- Resolved alerts show green in table and map
+- CSV export downloads with correct columns and data
+
+---
+
+## Sprint 8 — Testing & Hardening
+**Duration:** Week 9 | **Status:** PENDING
 
 **Goal:** System is robust, secure, and fully tested.
 
-### User Stories
-- As a developer, I want full test coverage
-  so that regressions are caught automatically.
-- As a user, I want the system to handle errors gracefully
-  so that crashes don't leave rangers without monitoring.
-
 ### Tasks
-- [ ] Increase test coverage to 80%+ on all backend routes
-- [ ] Add input validation middleware (express-validator)
-- [ ] Add rate limiting (express-rate-limit) on auth routes
-- [ ] Add helmet.js for security headers
+- [ ] Increase backend test coverage to 80%+
+- [ ] Add input validation (express-validator)
+- [ ] Add rate limiting on auth routes (express-rate-limit)
+- [ ] Add security headers (helmet.js)
 - [ ] Test all frontend components (React Testing Library)
-- [ ] End-to-end test: simulator -> MQTT -> DB -> frontend
-- [ ] Load test: simulate 10 sensors sending data simultaneously
-- [ ] Fix any bugs found during testing
+- [ ] End-to-end test: simulator -> MQTT -> DB -> dashboard
+- [ ] Load test: 10 sensors sending data simultaneously
 
 ### Patch File
     python3 patch_hardening.py
 
 ### Definition of Done
 - npm test shows 80%+ coverage
-- All security headers present (checked via securityheaders.com)
+- All security headers present
 - System handles 10 concurrent sensors without errors
 
 ---
 
-## Sprint 8 — Deployment & Documentation
-**Duration:** Week 9 | **Status:** PENDING
+## Sprint 9 — Deployment & Documentation
+**Duration:** Week 10 | **Status:** PENDING
 
-**Goal:** System is live, documented, and ready for handover.
-
-### User Stories
-- As a stakeholder, I want a live working system
-  so that forest rangers in Kibiti can start using it.
-- As a future developer, I want full documentation
-  so that I can maintain and extend the system.
+**Goal:** System is live, documented, and ready for submission.
 
 ### Tasks
-- [ ] Verify full cloud deployment (Render + Vercel + Supabase)
-- [ ] Configure custom domain (if available)
-- [ ] Run final SQL migrations on production Supabase
-- [ ] Create admin user account in Supabase Auth
-- [ ] Write final README.md with full setup instructions
-- [ ] Write API documentation (all endpoints with examples)
-- [ ] Write system architecture diagram (draw.io or Mermaid)
-- [ ] Record a demo video walkthrough
-- [ ] Write project report (maps to academic submission)
+- [ ] Verify full cloud stack (Render + Vercel + Supabase)
+- [ ] Run final migrations on production Supabase
+- [ ] Create ranger user accounts in Supabase Auth
+- [ ] Write final README.md with setup instructions
+- [ ] Write API documentation (all endpoints + examples)
+- [ ] Draw system architecture diagram
+- [ ] Record demo video walkthrough
+- [ ] Write project report (academic submission)
 
 ### Definition of Done
-- https://smartforest.vercel.app loads and works end-to-end
-- Ranger can log in, see the map, and receive an alert
-  triggered by the simulator within 10 seconds
-- All documentation complete and committed to repo
+- Frontend live on Vercel, backend live on Render
+- Ranger can log in, see map, receive dashboard alert
+  triggered by simulator within 10 seconds
+- All documentation committed to repo
 
 ---
 
 ## Patch Files Reference
 
-| Patch File                    | Sprint | Purpose                          |
-|-------------------------------|--------|----------------------------------|
-| patch.py                      | 0      | Initial project structure        |
-| patch_tests.py                | 0      | Add real Jest tests              |
-| patch_test_cleanup.py         | 0      | Fix Jest teardown warnings       |
-| patch_ci_fix.py               | 0      | Fix auto-merge permissions       |
-| patch_sprints.py              | 0      | This file                        |
-| patch_db_models.py            | 1      | Implement DB models + wire routes|
-| patch_mqtt_ingest.py          | 2      | Wire MQTT to DB + alert logic    |
-| patch_auth.py                 | 3      | Supabase Auth + JWT middleware   |
-| patch_frontend_dashboard.py   | 4      | React dashboard + components     |
-| patch_map.py                  | 5      | Leaflet map + alert pins         |
-| patch_notifications.py        | 6      | Email alerts + CSV export        |
-| patch_hardening.py            | 7      | Security + validation + coverage |
+| Patch File                   | Sprint | Purpose                           |
+|------------------------------|--------|-----------------------------------|
+| patch.py                     | 0      | Initial project structure         |
+| patch_tests.py               | 0      | Add real Jest tests               |
+| patch_test_cleanup.py        | 0      | Fix Jest teardown warnings        |
+| patch_ci_fix.py              | 0      | Fix auto-merge CI permissions     |
+| patch_env.py                 | 0      | Create backend .env               |
+| patch_sprints_v2.py          | 0      | This sprints file                 |
+| patch_db_models.py           | 1      | DB models + wire routes to DB     |
+| patch_mqtt_ingest.py         | 2      | MQTT -> DB + alert detection      |
+| patch_auth.py                | 3      | Supabase Auth + JWT middleware    |
+| patch_frontend_dashboard.py  | 4      | React dashboard + components      |
+| patch_map.py                 | 5      | Leaflet map + alert pins          |
+| patch_notifications.py       | 6      | Dashboard alerts + browser notifs |
+| patch_reporting.py           | 7      | CSV export + alert management     |
+| patch_hardening.py           | 8      | Security + validation + coverage  |
 
 ---
 
-## How to Update This File
+## Daily Git Workflow
 
-When you finish a task, change `[ ]` to `[x]`:
 ```bash
-nano SPRINTS.md
-# edit the checkboxes
-git add SPRINTS.md
-git commit -m "chore: update sprint progress"
+# Work on develop branch
+git add .
+git commit -m "feat: describe what you built"
 git push origin develop
+# GitHub Actions runs -> all tests pass -> auto-merge to main
+# Render redeploys backend, Vercel redeploys frontend
 ```
 
-When starting a new sprint, update its Status from PENDING to IN PROGRESS.
-When complete, update to DONE.
+## Updating Sprint Progress
+
+```bash
+nano SPRINTS.md          # change [ ] to [x] as tasks complete
+git add SPRINTS.md
+git commit -m "chore: update sprint 1 progress"
+git push origin develop
+```
