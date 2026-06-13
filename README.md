@@ -1,6 +1,6 @@
 # SmartForest — Illegal Logging Detection System
 
-Real-time monitoring system for detecting illegal logging in Kibiti, Tanzania.
+Real-time monitoring system for detecting illegal loggig in forest and other public reserve areas..
 
 ## Stack
 - **Backend**: Node.js + Express.js (local or Render.com)
