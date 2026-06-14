@@ -1,7 +1,8 @@
 version: '3.8'
 
-# Used for Render.com cloud deployment only.
-# Local dev runs Node and Mosquitto directly (no Docker needed).
+# Render.com cloud deployment only.
+# Frontend is on Vercel (no Docker needed there).
+# Local dev: run Node and Mosquitto directly without Docker.
 
 services:
 
@@ -25,6 +26,12 @@ services:
 
   simulator:
     build: ./simulator
+    environment:
+      - MQTT_BROKER_HOST=mqtt-broker
+      - MQTT_BROKER_PORT=1883
+      - MQTT_TOPIC=forest/sensor/data
+      - SEND_INTERVAL=5
+      - SPIKE_CHANCE=0.20
     depends_on:
       - mqtt-broker
     restart: unless-stopped
