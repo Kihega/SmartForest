@@ -1,1 +1,1 @@
-// TODO: live alerts table component
+export default function AlertsTable() { return null }

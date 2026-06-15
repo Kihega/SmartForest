@@ -1,1 +1,1 @@
-// TODO: per-sensor status card
+export default function SensorCard() { return null }

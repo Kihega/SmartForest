@@ -1,1 +1,1 @@
-// TODO: single alert detail view
+export default function AlertDetail() { return null }
