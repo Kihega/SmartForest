@@ -1,57 +1,33 @@
 #!/usr/bin/env python3
 """
-Fix jest.setup.js module path issues
+Fix jest.setup.js by removing the non-existent database module mock
 Usage: python3 patch.py
 """
 
 import os
-import sys
 
 def fix_jest_setup():
     file_path = 'backend/jest.setup.js'
     
-    # Check if file exists
-    if not os.path.exists(file_path):
-        print(f"❌ Error: {file_path} not found")
-        sys.exit(1)
-    
-    # Read the file
     with open(file_path, 'r') as f:
-        content = f.read()
+        lines = f.readlines()
     
-    print("Current jest.setup.js content (first 10 lines):")
-    print("=" * 60)
-    lines = content.split('\n')[:10]
+    # Remove lines 55-58 (the database mock that references non-existent module)
+    # Keep everything else
+    new_lines = []
+    skip_until_line = None
+    
     for i, line in enumerate(lines, 1):
-        print(f"{i}: {line}")
-    print("=" * 60)
+        # Skip the database mock block (lines 55-58)
+        if i >= 55 and i <= 58:
+            continue
+        new_lines.append(line)
     
-    # Check for various patterns
-    patterns = [
-        ("./src/config/db", "./src/config/database"),
-        ("./src/config/database'", "./src/config/database'"),
-    ]
-    
-    fixed = False
-    for old_pattern, new_pattern in patterns:
-        if old_pattern in content:
-            content = content.replace(old_pattern, new_pattern)
-            print(f"✅ Fixed: '{old_pattern}' → '{new_pattern}'")
-            fixed = True
-    
-    if not fixed:
-        print("⚠️  No patterns matching './src/config/db' or './src/config/database' found")
-        print("\nLooking for any jest.mock lines:")
-        for i, line in enumerate(lines, 1):
-            if 'jest.mock' in line:
-                print(f"Line {i}: {line}")
-        sys.exit(0)
-    
-    # Write the file back
     with open(file_path, 'w') as f:
-        f.write(content)
+        f.writelines(new_lines)
     
-    print(f"\n✅ Successfully updated: {file_path}")
+    print("✅ Removed non-existent database mock from jest.setup.js")
+    print("Lines 55-58 deleted (jest.mock('./src/config/database', ...))")
 
 if __name__ == '__main__':
     fix_jest_setup()

@@ -52,10 +52,6 @@ jest.mock('./src/models/userModel', () => ({
   })
 }));
 
-jest.mock('./src/config/database', () => ({
-  query: jest.fn().mockResolvedValue({ rows: [] }),
-  execute: jest.fn().mockResolvedValue({ success: true })
-}));
 
 // Suppress console noise during tests
 global.console.error = jest.fn();
