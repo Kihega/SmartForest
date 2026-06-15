@@ -76,8 +76,10 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install dependencies
-        run: pip install -r simulator/requirements.txt
-      - name: Run tests
+        run: |
+          python -m pip install --upgrade pip
+          pip install paho-mqtt pytest
+      - name: Run simulator tests
         run: pytest simulator/tests/ -v
 
   docker-build:

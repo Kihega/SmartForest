@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import Navbar from '../components/Navbar.jsx'
 import { getAPI } from '../services/api.js'
 
@@ -34,16 +34,16 @@ const S = {
     display:'inline-block', padding:'3px 9px',
     borderRadius:20, fontSize:11, fontWeight:600
   },
-  empty: { textAlign:'center', padding:'32px', color:'#9ca3af', fontSize:13 },
+  empty:      { textAlign:'center', padding:'32px', color:'#9ca3af', fontSize:13 },
   comingSoon: { textAlign:'center', padding:'32px', color:'#9ca3af', fontSize:13 }
 }
 
 function statusBadge(status) {
-  const styles = {
+  const map = {
     unresolved: { background:'#fee2e2', color:'#dc2626' },
     resolved:   { background:'#dcfce7', color:'#16a34a' },
   }
-  return { ...S.badge, ...(styles[status] || { background:'#f3f4f6', color:'#6b7280' }) }
+  return { ...S.badge, ...(map[status] || { background:'#f3f4f6', color:'#6b7280' }) }
 }
 
 function alertTypeBadge(type) {
@@ -63,7 +63,9 @@ export default function UserDashboard({ session, onLogout }) {
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState('')
 
-  async function fetchData() {
+  // useCallback keeps fetchData stable so ESLint is happy
+  // when it is used as a useEffect dependency
+  const fetchData = useCallback(async () => {
     try {
       const api = await getAPI()
       const [a, s, c] = await Promise.all([
@@ -71,8 +73,8 @@ export default function UserDashboard({ session, onLogout }) {
         api.get('/sensors/live'),
         api.get('/alerts/count'),
       ])
-      setAlerts(a.data  || [])
-      setSensors(s.data || [])
+      setAlerts(a.data   || [])
+      setSensors(s.data  || [])
       setCount(c.data?.count || 0)
       setError('')
     } catch {
@@ -80,13 +82,13 @@ export default function UserDashboard({ session, onLogout }) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     fetchData()
     const id = setInterval(fetchData, 10000)
     return () => clearInterval(id)
-  }, [])
+  }, [fetchData])
 
   const micSensors   = sensors.filter(s => s.sensor_type === 'microphone')
   const flameSensors = sensors.filter(s => s.sensor_type === 'flame')
@@ -103,16 +105,16 @@ export default function UserDashboard({ session, onLogout }) {
             background:'#fee2e2', color:'#dc2626', borderRadius:8,
             padding:'12px 16px', marginBottom:20, fontSize:13
           }}>
-            ⚠️ {error}
+            {error}
           </div>
         )}
 
-        {/* Summary cards */}
         <div style={S.grid}>
           <div style={S.card}>
             <div style={S.cardIcon}>🚨</div>
             <div style={S.cardLabel}>Unresolved Alerts</div>
-            <div style={{...S.cardVal, color: count > 0 ? '#dc2626' : '#16a34a'}}>
+            <div style={{...S.cardVal,
+              color: count > 0 ? '#dc2626' : '#16a34a'}}>
               {loading ? '…' : count}
             </div>
           </div>
@@ -132,22 +134,20 @@ export default function UserDashboard({ session, onLogout }) {
           </div>
           <div style={S.card}>
             <div style={S.cardIcon}>📋</div>
-            <div style={S.cardLabel}>Total Alerts (history)</div>
+            <div style={S.cardLabel}>Total Alerts</div>
             <div style={S.cardVal}>
               {loading ? '…' : alerts.length}
             </div>
           </div>
         </div>
 
-        {/* Live sensors */}
         <div style={S.section}>
           <div style={S.secTitle}>📡 Live Sensor Status</div>
           {loading ? (
             <div style={S.empty}>Loading sensors…</div>
           ) : sensors.length === 0 ? (
             <div style={S.empty}>
-              No sensor data yet.<br/>
-              Start the simulator: <code>python mqtt_simulator.py</code>
+              No sensor data yet. Start the simulator.
             </div>
           ) : (
             <table style={S.table}>
@@ -178,7 +178,7 @@ export default function UserDashboard({ session, onLogout }) {
                         {s.is_alert ? '🔴 Alert' : '🟢 Normal'}
                       </span>
                     </td>
-                    <td style={{...S.td,color:'#9ca3af',fontSize:12}}>
+                    <td style={{...S.td, color:'#9ca3af', fontSize:12}}>
                       {fmtTime(s.recorded_at)}
                     </td>
                   </tr>
@@ -188,7 +188,6 @@ export default function UserDashboard({ session, onLogout }) {
           )}
         </div>
 
-        {/* Alerts table */}
         <div style={S.section}>
           <div style={S.secTitle}>🚨 Alert History</div>
           {loading ? (
@@ -208,9 +207,7 @@ export default function UserDashboard({ session, onLogout }) {
                   <tr key={a.id}>
                     <td style={S.td}>
                       <span style={alertTypeBadge(a.alert_type)}>
-                        {a.alert_type === 'fire'
-                          ? '🔥 Fire'
-                          : '🪚 Logging'}
+                        {a.alert_type === 'fire' ? '🔥 Fire' : '🪚 Logging'}
                       </span>
                     </td>
                     <td style={S.td}>{a.device_id}</td>
@@ -225,7 +222,7 @@ export default function UserDashboard({ session, onLogout }) {
                         {a.status}
                       </span>
                     </td>
-                    <td style={{...S.td,fontSize:12,color:'#9ca3af'}}>
+                    <td style={{...S.td, fontSize:12, color:'#9ca3af'}}>
                       {fmtTime(a.created_at)}
                     </td>
                   </tr>
@@ -235,23 +232,15 @@ export default function UserDashboard({ session, onLogout }) {
           )}
         </div>
 
-        {/* Map & trends placeholders */}
         <div style={{display:'grid',
-                     gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',
-                     gap:16}}>
+          gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:16}}>
           <div style={S.section}>
             <div style={S.secTitle}>🗺️ Forest Map</div>
-            <div style={S.comingSoon}>
-              Leaflet map with sensor pins<br/>
-              <span style={{color:'#d1d5db'}}>Sprint 5</span>
-            </div>
+            <div style={S.comingSoon}>Leaflet map — Sprint 5</div>
           </div>
           <div style={S.section}>
             <div style={S.secTitle}>📈 Trend Analysis</div>
-            <div style={S.comingSoon}>
-              Alert frequency charts over time<br/>
-              <span style={{color:'#d1d5db'}}>Sprint 7</span>
-            </div>
+            <div style={S.comingSoon}>Charts — Sprint 7</div>
           </div>
         </div>
 
