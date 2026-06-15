@@ -1,6 +1,5 @@
--- MIGRATION 001: Create users table
--- Run this FIRST in Supabase SQL Editor
--- (alerts table references users.id so users must exist first)
+-- MIGRATION 001: users table
+-- Run FIRST in Supabase SQL Editor
 
 CREATE TABLE IF NOT EXISTS users (
   id         SERIAL PRIMARY KEY,
