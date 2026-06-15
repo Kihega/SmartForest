@@ -1,1 +1,1 @@
-// TODO: Leaflet map with sensor markers
+export default function ForestMap() { return null }

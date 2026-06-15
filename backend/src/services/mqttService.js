@@ -1,33 +1,41 @@
-const mqtt = require('mqtt');
+const mqtt         = require('mqtt');
+const sensorModel  = require('../models/sensorModel');
+const alertService = require('./alertService');
 require('dotenv').config();
 
-const BROKER_URL          = process.env.MQTT_BROKER || 'mqtt://localhost:1883';
-const TOPIC               = process.env.MQTT_TOPIC  || 'forest/sensor/data';
-const SOUND_THRESHOLD     = parseFloat(process.env.SOUND_THRESHOLD_DB || 80);
-const VIBRATION_THRESHOLD = parseFloat(process.env.VIBRATION_THRESHOLD || 7);
+const BROKER_URL = process.env.MQTT_BROKER || 'mqtt://localhost:1883';
+const TOPIC      = process.env.MQTT_TOPIC  || 'forest/sensor/data';
 
 function connectMQTT() {
   const client = mqtt.connect(BROKER_URL);
 
   client.on('connect', () => {
     client.subscribe(TOPIC);
-    console.log(`MQTT connected — subscribed to: ${TOPIC}`);
+    console.log(`[MQTT] Connected -> subscribed to: ${TOPIC}`);
   });
 
   client.on('message', async (topic, message) => {
     try {
-      const data    = JSON.parse(message.toString());
-      const isAlert = data.sound_db > SOUND_THRESHOLD ||
-                      data.vibration > VIBRATION_THRESHOLD;
-      // TODO: call sensorModel.saveReading() and alertService.handleAlert()
-      console.log(`Sensor: ${data.device_id} | Sound: ${data.sound_db}dB | Alert: ${isAlert}`);
+      const data = JSON.parse(message.toString());
+
+      // 1. Save every reading to sensor_readings table
+      const reading = await sensorModel.saveReading(data);
+      console.log(`[MQTT] Saved reading: ${data.device_id} | ${data.zone} | sound: ${data.sound_db}dB`);
+
+      // 2. Check thresholds and create alert if needed
+      await alertService.evaluateReading(data);
+
     } catch (err) {
-      console.error('MQTT message error:', err.message);
+      console.error(`[MQTT] Error processing message: ${err.message}`);
     }
   });
 
   client.on('error', (err) => {
-    console.error('MQTT connection error:', err.message);
+    console.error(`[MQTT] Connection error: ${err.message}`);
+  });
+
+  client.on('reconnect', () => {
+    console.log('[MQTT] Reconnecting...');
   });
 }
 
