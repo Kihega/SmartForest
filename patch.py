@@ -1,33 +1,36 @@
 #!/usr/bin/env python3
 """
-Fix jest.setup.js by removing the non-existent database module mock
+Create the missing backend/src/config/database.js file
 Usage: python3 patch.py
 """
 
 import os
 
-def fix_jest_setup():
-    file_path = 'backend/jest.setup.js'
+def create_database_config():
+    file_path = 'backend/src/config/database.js'
     
-    with open(file_path, 'r') as f:
-        lines = f.readlines()
+    # Create directories if they don't exist
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
     
-    # Remove lines 55-58 (the database mock that references non-existent module)
-    # Keep everything else
-    new_lines = []
-    skip_until_line = None
-    
-    for i, line in enumerate(lines, 1):
-        # Skip the database mock block (lines 55-58)
-        if i >= 55 and i <= 58:
-            continue
-        new_lines.append(line)
+    content = '''// Database configuration and connection pool
+const { Pool } = require('pg');
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL || 'postgresql://localhost/smartforest'
+});
+
+module.exports = {
+  query: (text, params) => pool.query(text, params),
+  execute: (text, params) => pool.query(text, params),
+  pool
+};
+'''
     
     with open(file_path, 'w') as f:
-        f.writelines(new_lines)
+        f.write(content)
     
-    print("✅ Removed non-existent database mock from jest.setup.js")
-    print("Lines 55-58 deleted (jest.mock('./src/config/database', ...))")
+    print(f"✅ Created {file_path}")
+    print("   This file exports query/execute functions that Jest can mock")
 
 if __name__ == '__main__':
-    fix_jest_setup()
+    create_database_config()
