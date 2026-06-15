@@ -15,7 +15,19 @@
     "forceExit": true,
     "silent": true,
     "testTimeout": 10000,
-    "setupFiles": ["./jest.setup.js"]
+    "setupFiles": [
+      "./jest.setup.js"
+    ],
+    "setupFilesAfterEnv": [
+      "<rootDir>/jest.setup.js"
+    ],
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ],
+    "collectCoverageFrom": [
+      "src/**/*.js",
+      "!src/config/**"
+    ]
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.0",

@@ -1,3 +1,7 @@
+jest.mock('../src/config/database', () => ({
+  query: jest.fn().mockResolvedValue({ rows: [] })
+}));
+
 const request = require('supertest');
 const { app } = require('../src/index');
 

@@ -1,37 +1,62 @@
-// jest.setup.js
-// Runs before every test file.
-// Mocks external services so tests never need a live DB or Supabase.
-
-// ── Mock pg Pool (Supabase PostgreSQL) ──────────────────
-jest.mock('./src/config/db', () => {
-  return {
-    query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
-  };
-});
-
-// ── Mock Supabase client ─────────────────────────────────
-jest.mock('./src/config/supabase', () => {
-  return {
-    auth: {
-      signInWithPassword: jest.fn().mockResolvedValue({
-        data: null,
-        error: { message: 'Invalid credentials' },
-      }),
-      signOut: jest.fn().mockResolvedValue({ error: null }),
-      getUser: jest.fn().mockResolvedValue({
-        data: null,
-        error: { message: 'Invalid token' },
-      }),
-    },
-  };
-});
-
-// ── Mock MQTT (no broker needed in tests) ────────────────
-jest.mock('mqtt', () => ({
-  connect: jest.fn().mockReturnValue({
-    on         : jest.fn(),
-    subscribe  : jest.fn(),
-    publish    : jest.fn(),
-    disconnect : jest.fn(),
-  }),
+// Jest setup - mock Supabase and database models
+jest.mock('./src/config/supabase', () => ({
+  auth: {
+    signInWithPassword: jest.fn().mockResolvedValue({
+      data: {
+        user: {
+          id: 'test-user-123',
+          email: 'test@example.com',
+          user_metadata: { 
+            name: 'Test User', 
+            role: 'ranger' 
+          }
+        },
+        session: {
+          access_token: 'test-token-xyz',
+          expires_at: Math.floor(Date.now() / 1000) + 3600
+        }
+      },
+      error: null
+    }),
+    signOut: jest.fn().mockResolvedValue({ error: null }),
+    getUser: jest.fn().mockResolvedValue({
+      data: {
+        user: {
+          id: 'test-user-123',
+          email: 'test@example.com'
+        }
+      },
+      error: null
+    })
+  }
 }));
+
+jest.mock('./src/models/userModel', () => ({
+  create: jest.fn().mockResolvedValue({
+    id: 'user-123',
+    email: 'test@example.com',
+    role: 'ranger',
+    name: 'Test User'
+  }),
+  getByEmail: jest.fn().mockResolvedValue({
+    id: 'user-123',
+    email: 'test@example.com',
+    role: 'ranger',
+    name: 'Test User'
+  }),
+  getById: jest.fn().mockResolvedValue({
+    id: 'user-123',
+    email: 'test@example.com',
+    role: 'ranger',
+    name: 'Test User'
+  })
+}));
+
+jest.mock('./src/config/database', () => ({
+  query: jest.fn().mockResolvedValue({ rows: [] }),
+  execute: jest.fn().mockResolvedValue({ success: true })
+}));
+
+// Suppress console noise during tests
+global.console.error = jest.fn();
+global.console.warn = jest.fn();
