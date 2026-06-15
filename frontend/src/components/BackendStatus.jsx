@@ -1,25 +1,39 @@
-import { useState, useEffect } from 'react'
-import { resolveBackend } from '../services/api.js'
+import { useEffect, useState } from 'react'
 
 export default function BackendStatus() {
   const [status, setStatus] = useState('checking')
 
   useEffect(() => {
-    resolveBackend()
-      .then(() => setStatus('ok'))
-      .catch(() => setStatus('error'))
+    const checkBackend = async () => {
+      try {
+        const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000'
+        const response = await fetch(`${backendUrl}/api/health`)
+        setStatus(response.ok ? 'online' : 'offline')
+      } catch {
+        setStatus('offline')
+      }
+    }
+
+    checkBackend()
+    const interval = setInterval(checkBackend, 30000)
+    return () => clearInterval(interval)
   }, [])
 
-  if (status !== 'error') return null
+  if (status === 'online') return null
 
   return (
     <div style={{
-      background:'#fef3c7', borderBottom:'2px solid #d97706',
-      padding:'10px 20px', textAlign:'center',
-      fontSize:13, color:'#92400e'
+      position: 'fixed',
+      top: 10,
+      right: 10,
+      background: status === 'checking' ? '#fbbf24' : '#ef4444',
+      color: 'white',
+      padding: '8px 12px',
+      borderRadius: '4px',
+      fontSize: '12px',
+      zIndex: 1000
     }}>
-      ⚠️ No backend reachable. Check Render.com deployment
-      or start local backend: <code>cd backend && npm run dev</code>
+      🔴 Backend {status === 'checking' ? 'checking...' : 'offline'}
     </div>
   )
 }
