@@ -1,17 +1,7 @@
 #!/usr/bin/env python3
 """
-patch_sensors_upgrade.py — Upgrade sensors to real hardware types
-Adds:
-  1. Two sensor types: MICROPHONE (chainsaw/abnormal sound) + FLAME (fire detection)
-  2. Simulator auto-detects active backend (Render cloud first, local fallback)
-  3. Simulator sends readings via BOTH MQTT and HTTP POST (redundancy)
-  4. Backend: alert_type field in DB and alertService logic per sensor type
-  5. Updated DB migrations to include sensor_type and alert_type columns
-  6. Updated alertService thresholds per sensor type
-  7. Updated tests to cover both sensor types
-  8. Daily testing flow script: run_test_flow.sh
-
-Run from SmartForest ROOT: python3 patch_sensors_upgrade.py
+patch_ci_secrets.py — Fix CI: inject GitHub Secrets as env vars + mock Supabase in tests
+Run from SmartForest ROOT: python3 patch_ci_secrets.py
 """
 import os
 
@@ -24,808 +14,199 @@ def overwrite(path, content):
         f.write(content)
     print("  [UPDATE] " + path)
 
-def mkfile(path, content):
-    full = os.path.join(ROOT, path)
-    os.makedirs(os.path.dirname(full), exist_ok=True)
-    if os.path.exists(full):
-        print("  [SKIP]   " + path + " (exists)")
-        return
-    with open(full, "w") as f:
-        f.write(content)
-    print("  [CREATE] " + path)
-
 if not os.path.isdir(os.path.join(ROOT, "backend")):
     print("ERROR: Run from SmartForest ROOT folder.")
     exit(1)
 
-BT = chr(96)
+# ── 1. Updated CI yml — inject secrets as env vars ───────────
+CI_YML = (
+    "name: CI - Test, Build & Auto-Merge to Main\n\n"
+    "on:\n"
+    "  push:\n"
+    "    branches: [develop]\n"
+    "  pull_request:\n"
+    "    branches: [main]\n\n"
+    "permissions:\n"
+    "  contents: write\n\n"
+    "jobs:\n\n"
+    "  test-backend:\n"
+    "    name: Backend Tests\n"
+    "    runs-on: ubuntu-latest\n"
+    "    env:\n"
+    "      NODE_ENV: test\n"
+    "      PORT: 5000\n"
+    "      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}\n"
+    "      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}\n"
+    "      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}\n"
+    "      DATABASE_URL: ${{ secrets.DATABASE_URL }}\n"
+    "      JWT_SECRET: ${{ secrets.JWT_SECRET }}\n"
+    "      MQTT_BROKER: mqtt://localhost:1883\n"
+    "      MQTT_TOPIC: forest/sensor/data\n"
+    "      SOUND_THRESHOLD_DB: 80\n"
+    "      TEMP_THRESHOLD_C: 55\n"
+    "      DEDUP_MINUTES: 5\n"
+    "    steps:\n"
+    "      - uses: actions/checkout@v4\n"
+    "      - name: Setup Node.js\n"
+    "        uses: actions/setup-node@v4\n"
+    "        with:\n"
+    "          node-version: '20'\n"
+    "          cache: 'npm'\n"
+    "          cache-dependency-path: backend/package-lock.json\n"
+    "      - name: Install dependencies\n"
+    "        working-directory: ./backend\n"
+    "        run: npm ci\n"
+    "      - name: Run tests\n"
+    "        working-directory: ./backend\n"
+    "        run: npm test\n\n"
+    "  test-frontend:\n"
+    "    name: Frontend Lint & Build\n"
+    "    runs-on: ubuntu-latest\n"
+    "    steps:\n"
+    "      - uses: actions/checkout@v4\n"
+    "      - name: Setup Node.js\n"
+    "        uses: actions/setup-node@v4\n"
+    "        with:\n"
+    "          node-version: '20'\n"
+    "          cache: 'npm'\n"
+    "          cache-dependency-path: frontend/package-lock.json\n"
+    "      - name: Install dependencies\n"
+    "        working-directory: ./frontend\n"
+    "        run: npm ci\n"
+    "      - name: Lint\n"
+    "        working-directory: ./frontend\n"
+    "        run: npm run lint\n"
+    "      - name: Build\n"
+    "        working-directory: ./frontend\n"
+    "        run: npm run build\n"
+    "        env:\n"
+    "          VITE_API_URL_CLOUD: ${{ secrets.VITE_API_URL_CLOUD }}\n"
+    "          VITE_API_URL_LOCAL: http://localhost:5000/api\n\n"
+    "  test-simulator:\n"
+    "    name: Simulator Tests\n"
+    "    runs-on: ubuntu-latest\n"
+    "    steps:\n"
+    "      - uses: actions/checkout@v4\n"
+    "      - name: Setup Python\n"
+    "        uses: actions/setup-python@v5\n"
+    "        with:\n"
+    "          python-version: '3.11'\n"
+    "      - name: Install dependencies\n"
+    "        run: pip install -r simulator/requirements.txt\n"
+    "      - name: Run tests\n"
+    "        run: pytest simulator/tests/ -v\n\n"
+    "  docker-build:\n"
+    "    name: Docker Build Check\n"
+    "    runs-on: ubuntu-latest\n"
+    "    needs: [test-backend, test-frontend]\n"
+    "    steps:\n"
+    "      - uses: actions/checkout@v4\n"
+    "      - name: Build backend Docker image\n"
+    "        run: docker build ./backend -t smartforest-backend\n\n"
+    "  auto-merge-to-main:\n"
+    "    name: Auto-merge to Main\n"
+    "    runs-on: ubuntu-latest\n"
+    "    needs: [test-backend, test-frontend, test-simulator, docker-build]\n"
+    "    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'\n"
+    "    steps:\n"
+    "      - uses: actions/checkout@v4\n"
+    "        with:\n"
+    "          fetch-depth: 0\n"
+    "          token: ${{ secrets.GITHUB_TOKEN }}\n"
+    "      - name: Configure Git\n"
+    "        run: |\n"
+    "          git config user.name \"github-actions[bot]\"\n"
+    "          git config user.email \"github-actions[bot]@users.noreply.github.com\"\n"
+    "      - name: Merge develop into main\n"
+    "        run: |\n"
+    "          git checkout main\n"
+    "          git merge develop --no-ff -m \"ci: auto-merge develop into main [skip ci]\"\n"
+    "          git push origin main\n"
+)
 
-# ─────────────────────────────────────────────────────────────
-# 1. DB MIGRATIONS — add sensor_type + alert_type columns
-# ─────────────────────────────────────────────────────────────
-print("\n[1/7] Updating DB migrations...")
+# ── 2. Jest setup file — mock Supabase + pg pool for tests ───
+JEST_SETUP = (
+    "// jest.setup.js\n"
+    "// Runs before every test file.\n"
+    "// Mocks external services so tests never need a live DB or Supabase.\n\n"
+    "// ── Mock pg Pool (Supabase PostgreSQL) ──────────────────\n"
+    "jest.mock('./src/config/db', () => {\n"
+    "  return {\n"
+    "    query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }),\n"
+    "  };\n"
+    "});\n\n"
+    "// ── Mock Supabase client ─────────────────────────────────\n"
+    "jest.mock('./src/config/supabase', () => {\n"
+    "  return {\n"
+    "    auth: {\n"
+    "      signInWithPassword: jest.fn().mockResolvedValue({\n"
+    "        data: null,\n"
+    "        error: { message: 'Invalid credentials' },\n"
+    "      }),\n"
+    "      signOut: jest.fn().mockResolvedValue({ error: null }),\n"
+    "      getUser: jest.fn().mockResolvedValue({\n"
+    "        data: null,\n"
+    "        error: { message: 'Invalid token' },\n"
+    "      }),\n"
+    "    },\n"
+    "  };\n"
+    "});\n\n"
+    "// ── Mock MQTT (no broker needed in tests) ────────────────\n"
+    "jest.mock('mqtt', () => ({\n"
+    "  connect: jest.fn().mockReturnValue({\n"
+    "    on         : jest.fn(),\n"
+    "    subscribe  : jest.fn(),\n"
+    "    publish    : jest.fn(),\n"
+    "    disconnect : jest.fn(),\n"
+    "  }),\n"
+    "}));\n"
+)
 
-overwrite("database/migrations/001_create_users.sql", (
-    "-- MIGRATION 001: users table\n"
-    "-- Run FIRST in Supabase SQL Editor\n\n"
-    "CREATE TABLE IF NOT EXISTS users (\n"
-    "  id         SERIAL PRIMARY KEY,\n"
-    "  name       VARCHAR(100),\n"
-    "  email      VARCHAR(100)  UNIQUE NOT NULL,\n"
-    "  role       VARCHAR(20)   DEFAULT 'ranger',\n"
-    "  created_at TIMESTAMPTZ   DEFAULT NOW()\n"
-    ");\n"
-))
+# ── 3. Updated package.json — point to jest setup file ───────
+PACKAGE_JSON = (
+    '{\n'
+    '  "name": "backend",\n'
+    '  "version": "1.0.0",\n'
+    '  "description": "SmartForest illegal logging detection backend",\n'
+    '  "main": "src/index.js",\n'
+    '  "type": "commonjs",\n'
+    '  "scripts": {\n'
+    '    "start": "node src/index.js",\n'
+    '    "dev": "nodemon src/index.js",\n'
+    '    "test": "jest",\n'
+    '    "test:verbose": "jest --verbose"\n'
+    '  },\n'
+    '  "jest": {\n'
+    '    "testEnvironment": "node",\n'
+    '    "forceExit": true,\n'
+    '    "silent": true,\n'
+    '    "testTimeout": 10000,\n'
+    '    "setupFiles": ["./jest.setup.js"]\n'
+    '  },\n'
+    '  "dependencies": {\n'
+    '    "@supabase/supabase-js": "^2.49.0",\n'
+    '    "cors": "^2.8.6",\n'
+    '    "dotenv": "^17.4.2",\n'
+    '    "express": "^5.2.1",\n'
+    '    "mqtt": "^5.15.1",\n'
+    '    "pg": "^8.21.0"\n'
+    '  },\n'
+    '  "devDependencies": {\n'
+    '    "jest": "^30.4.2",\n'
+    '    "nodemon": "^3.1.14",\n'
+    '    "supertest": "^7.2.2"\n'
+    '  }\n'
+    '}\n'
+)
 
-overwrite("database/migrations/002_create_sensor_readings.sql", (
-    "-- MIGRATION 002: sensor_readings table\n"
-    "-- Run SECOND in Supabase SQL Editor\n\n"
-    "-- sensor_type:\n"
-    "--   'microphone' = detects abnormal sounds (chainsaw noise -> illegal logging)\n"
-    "--   'flame'      = detects fire/heat signatures in forest areas\n\n"
-    "CREATE TABLE IF NOT EXISTS sensor_readings (\n"
-    "  id          SERIAL PRIMARY KEY,\n"
-    "  device_id   VARCHAR(50)      NOT NULL,\n"
-    "  sensor_type VARCHAR(20)      NOT NULL DEFAULT 'microphone',\n"
-    "  zone        VARCHAR(100),\n"
-    "  latitude    DOUBLE PRECISION,\n"
-    "  longitude   DOUBLE PRECISION,\n"
-    "  -- Microphone sensor fields\n"
-    "  sound_db    NUMERIC(5,2),\n"
-    "  -- Flame sensor fields\n"
-    "  flame_detected  BOOLEAN      DEFAULT FALSE,\n"
-    "  temperature_c   NUMERIC(5,2),\n"
-    "  -- Alert flag\n"
-    "  is_alert    BOOLEAN          DEFAULT FALSE,\n"
-    "  recorded_at TIMESTAMPTZ      DEFAULT NOW()\n"
-    ");\n\n"
-    "CREATE INDEX IF NOT EXISTS idx_sr_device\n"
-    "  ON sensor_readings(device_id);\n"
-    "CREATE INDEX IF NOT EXISTS idx_sr_time\n"
-    "  ON sensor_readings(recorded_at DESC);\n"
-    "CREATE INDEX IF NOT EXISTS idx_sr_type\n"
-    "  ON sensor_readings(sensor_type);\n"
-))
+print("\nApplying CI secrets fix...\n")
+overwrite(".github/workflows/ci.yml", CI_YML)
+overwrite("backend/jest.setup.js",    JEST_SETUP)
+overwrite("backend/package.json",     PACKAGE_JSON)
 
-overwrite("database/migrations/003_create_alerts.sql", (
-    "-- MIGRATION 003: alerts table\n"
-    "-- Run THIRD in Supabase SQL Editor\n"
-    "-- Requires migration 001 (users) to exist first\n\n"
-    "-- alert_type:\n"
-    "--   'illegal_logging' = triggered by microphone detecting chainsaw sounds\n"
-    "--   'fire'            = triggered by flame sensor detecting fire/heat\n\n"
-    "CREATE TABLE IF NOT EXISTS alerts (\n"
-    "  id             SERIAL PRIMARY KEY,\n"
-    "  device_id      VARCHAR(50),\n"
-    "  sensor_type    VARCHAR(20)  DEFAULT 'microphone',\n"
-    "  alert_type     VARCHAR(30)  DEFAULT 'illegal_logging',\n"
-    "  zone           VARCHAR(100),\n"
-    "  latitude       DOUBLE PRECISION,\n"
-    "  longitude      DOUBLE PRECISION,\n"
-    "  -- Microphone reading that triggered alert\n"
-    "  sound_db       NUMERIC(5,2),\n"
-    "  -- Flame reading that triggered alert\n"
-    "  flame_detected BOOLEAN      DEFAULT FALSE,\n"
-    "  temperature_c  NUMERIC(5,2),\n"
-    "  -- Status\n"
-    "  status         VARCHAR(20)  DEFAULT 'unresolved',\n"
-    "  resolved_by    INTEGER      REFERENCES users(id),\n"
-    "  created_at     TIMESTAMPTZ  DEFAULT NOW()\n"
-    ");\n\n"
-    "CREATE INDEX IF NOT EXISTS idx_alerts_status\n"
-    "  ON alerts(status);\n"
-    "CREATE INDEX IF NOT EXISTS idx_alerts_time\n"
-    "  ON alerts(created_at DESC);\n"
-    "CREATE INDEX IF NOT EXISTS idx_alerts_type\n"
-    "  ON alerts(alert_type);\n"
-))
-
-overwrite("database/seeds/dev_seed.sql", (
-    "-- DEV SEED: Sample data for testing\n"
-    "-- Run AFTER all 3 migrations in Supabase SQL Editor\n\n"
-    "INSERT INTO users (name, email, role) VALUES\n"
-    "  ('Admin Ranger', 'admin@smartforest.tz', 'admin'),\n"
-    "  ('John Ranger',  'john@smartforest.tz',  'ranger')\n"
-    "ON CONFLICT (email) DO NOTHING;\n\n"
-    "-- Microphone sensor readings (chainsaw detection)\n"
-    "INSERT INTO sensor_readings\n"
-    "  (device_id, sensor_type, zone, latitude, longitude,\n"
-    "   sound_db, is_alert)\n"
-    "VALUES\n"
-    "  ('MIC-001', 'microphone', 'Kibiti-North', -7.72, 38.95, 42.5, FALSE),\n"
-    "  ('MIC-002', 'microphone', 'Kibiti-South', -7.85, 38.88, 91.5, TRUE),\n"
-    "  ('MIC-003', 'microphone', 'Kibiti-East',  -7.78, 39.05, 33.0, FALSE)\n"
-    "ON CONFLICT DO NOTHING;\n\n"
-    "-- Flame sensor readings (fire detection)\n"
-    "INSERT INTO sensor_readings\n"
-    "  (device_id, sensor_type, zone, latitude, longitude,\n"
-    "   flame_detected, temperature_c, is_alert)\n"
-    "VALUES\n"
-    "  ('FLAME-001', 'flame', 'Kibiti-North', -7.72, 38.95, FALSE, 28.5, FALSE),\n"
-    "  ('FLAME-002', 'flame', 'Kibiti-South', -7.85, 38.88, TRUE,  67.3, TRUE)\n"
-    "ON CONFLICT DO NOTHING;\n\n"
-    "-- Alerts\n"
-    "INSERT INTO alerts\n"
-    "  (device_id, sensor_type, alert_type, zone,\n"
-    "   latitude, longitude, sound_db, status)\n"
-    "VALUES\n"
-    "  ('MIC-002', 'microphone', 'illegal_logging',\n"
-    "   'Kibiti-South', -7.85, 38.88, 91.5, 'unresolved');\n\n"
-    "INSERT INTO alerts\n"
-    "  (device_id, sensor_type, alert_type, zone,\n"
-    "   latitude, longitude, flame_detected, temperature_c, status)\n"
-    "VALUES\n"
-    "  ('FLAME-002', 'flame', 'fire',\n"
-    "   'Kibiti-South', -7.85, 38.88, TRUE, 67.3, 'unresolved');\n"
-))
-
-# ─────────────────────────────────────────────────────────────
-# 2. SENSOR MODEL — updated for both sensor types
-# ─────────────────────────────────────────────────────────────
-print("\n[2/7] Updating sensorModel.js...")
-
-overwrite("backend/src/models/sensorModel.js", (
-    "const pool = require('../config/db');\n\n"
-    "const sensorModel = {\n\n"
-    "  // Save any sensor reading (microphone or flame)\n"
-    "  async saveReading(data) {\n"
-    "    const {\n"
-    "      device_id, sensor_type = 'microphone',\n"
-    "      zone, latitude, longitude,\n"
-    "      sound_db, flame_detected, temperature_c, is_alert\n"
-    "    } = data;\n\n"
-    "    const result = await pool.query(\n"
-    "      `INSERT INTO sensor_readings\n"
-    "         (device_id, sensor_type, zone, latitude, longitude,\n"
-    "          sound_db, flame_detected, temperature_c, is_alert)\n"
-    "       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)\n"
-    "       RETURNING *`,\n"
-    "      [\n"
-    "        device_id,\n"
-    "        sensor_type,\n"
-    "        zone,\n"
-    "        latitude,\n"
-    "        longitude,\n"
-    "        sound_db       || null,\n"
-    "        flame_detected || false,\n"
-    "        temperature_c  || null,\n"
-    "        is_alert       || false,\n"
-    "      ]\n"
-    "    );\n"
-    "    return result.rows[0];\n"
-    "  },\n\n"
-    "  // All readings newest first\n"
-    "  async getAll(limit = 100) {\n"
-    "    const result = await pool.query(\n"
-    "      'SELECT * FROM sensor_readings ORDER BY recorded_at DESC LIMIT $1',\n"
-    "      [limit]\n"
-    "    );\n"
-    "    return result.rows;\n"
-    "  },\n\n"
-    "  // Latest reading per device\n"
-    "  async getLive() {\n"
-    "    const result = await pool.query(\n"
-    "      `SELECT DISTINCT ON (device_id)\n"
-    "              id, device_id, sensor_type, zone,\n"
-    "              latitude, longitude, sound_db,\n"
-    "              flame_detected, temperature_c,\n"
-    "              is_alert, recorded_at\n"
-    "       FROM   sensor_readings\n"
-    "       ORDER  BY device_id, recorded_at DESC`\n"
-    "    );\n"
-    "    return result.rows;\n"
-    "  },\n\n"
-    "  // Readings for a specific device\n"
-    "  async getByDevice(device_id, limit = 50) {\n"
-    "    const result = await pool.query(\n"
-    "      `SELECT * FROM sensor_readings\n"
-    "       WHERE  device_id = $1\n"
-    "       ORDER  BY recorded_at DESC LIMIT $2`,\n"
-    "      [device_id, limit]\n"
-    "    );\n"
-    "    return result.rows;\n"
-    "  },\n\n"
-    "  // Readings filtered by sensor type\n"
-    "  async getBySensorType(sensor_type, limit = 100) {\n"
-    "    const result = await pool.query(\n"
-    "      `SELECT * FROM sensor_readings\n"
-    "       WHERE  sensor_type = $1\n"
-    "       ORDER  BY recorded_at DESC LIMIT $2`,\n"
-    "      [sensor_type, limit]\n"
-    "    );\n"
-    "    return result.rows;\n"
-    "  },\n\n"
-    "};\n\n"
-    "module.exports = sensorModel;\n"
-))
-
-# ─────────────────────────────────────────────────────────────
-# 3. ALERT MODEL — updated with alert_type
-# ─────────────────────────────────────────────────────────────
-print("\n[3/7] Updating alertModel.js...")
-
-overwrite("backend/src/models/alertModel.js", (
-    "const pool = require('../config/db');\n\n"
-    "const alertModel = {\n\n"
-    "  async create(data) {\n"
-    "    const {\n"
-    "      device_id, sensor_type = 'microphone',\n"
-    "      alert_type = 'illegal_logging',\n"
-    "      zone, latitude, longitude,\n"
-    "      sound_db, flame_detected, temperature_c\n"
-    "    } = data;\n\n"
-    "    const result = await pool.query(\n"
-    "      `INSERT INTO alerts\n"
-    "         (device_id, sensor_type, alert_type, zone,\n"
-    "          latitude, longitude,\n"
-    "          sound_db, flame_detected, temperature_c)\n"
-    "       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)\n"
-    "       RETURNING *`,\n"
-    "      [\n"
-    "        device_id, sensor_type, alert_type,\n"
-    "        zone, latitude, longitude,\n"
-    "        sound_db       || null,\n"
-    "        flame_detected || false,\n"
-    "        temperature_c  || null,\n"
-    "      ]\n"
-    "    );\n"
-    "    return result.rows[0];\n"
-    "  },\n\n"
-    "  async getAll(limit = 100) {\n"
-    "    const result = await pool.query(\n"
-    "      'SELECT * FROM alerts ORDER BY created_at DESC LIMIT $1',\n"
-    "      [limit]\n"
-    "    );\n"
-    "    return result.rows;\n"
-    "  },\n\n"
-    "  async getById(id) {\n"
-    "    const result = await pool.query(\n"
-    "      'SELECT * FROM alerts WHERE id = $1', [id]\n"
-    "    );\n"
-    "    return result.rows[0] || null;\n"
-    "  },\n\n"
-    "  async getUnresolved() {\n"
-    "    const result = await pool.query(\n"
-    "      `SELECT * FROM alerts\n"
-    "       WHERE status = 'unresolved'\n"
-    "       ORDER BY created_at DESC`\n"
-    "    );\n"
-    "    return result.rows;\n"
-    "  },\n\n"
-    "  async countUnresolved() {\n"
-    "    const result = await pool.query(\n"
-    "      `SELECT COUNT(*) FROM alerts WHERE status = 'unresolved'`\n"
-    "    );\n"
-    "    return parseInt(result.rows[0].count, 10);\n"
-    "  },\n\n"
-    "  async resolve(id) {\n"
-    "    const result = await pool.query(\n"
-    "      `UPDATE alerts SET status = 'resolved'\n"
-    "       WHERE id = $1 RETURNING *`,\n"
-    "      [id]\n"
-    "    );\n"
-    "    return result.rows[0] || null;\n"
-    "  },\n\n"
-    "  // Deduplication: true if same device alerted in last N minutes\n"
-    "  async recentlyAlerted(device_id, minutes = 5) {\n"
-    "    const result = await pool.query(\n"
-    "      `SELECT id FROM alerts\n"
-    "       WHERE  device_id = $1\n"
-    "       AND    created_at > NOW() - ($2 || ' minutes')::INTERVAL\n"
-    "       LIMIT  1`,\n"
-    "      [device_id, minutes]\n"
-    "    );\n"
-    "    return result.rows.length > 0;\n"
-    "  },\n\n"
-    "};\n\n"
-    "module.exports = alertModel;\n"
-))
-
-# ─────────────────────────────────────────────────────────────
-# 4. ALERT SERVICE — per sensor type logic
-# ─────────────────────────────────────────────────────────────
-print("\n[4/7] Updating alertService.js...")
-
-overwrite("backend/src/services/alertService.js", (
-    "const alertModel = require('../models/alertModel');\n"
-    "require('dotenv').config();\n\n"
-    "// Thresholds\n"
-    "const SOUND_THRESHOLD = parseFloat(process.env.SOUND_THRESHOLD_DB   || 80);  // dB\n"
-    "const TEMP_THRESHOLD  = parseFloat(process.env.TEMP_THRESHOLD_C     || 55);  // Celsius\n"
-    "const DEDUP_MINUTES   = parseInt(process.env.DEDUP_MINUTES          || 5);\n\n"
-    "const alertService = {\n\n"
-    "  async evaluateReading(data) {\n"
-    "    const { device_id, sensor_type } = data;\n\n"
-    "    let isAlert   = false;\n"
-    "    let alertType = null;\n\n"
-    "    if (sensor_type === 'microphone') {\n"
-    "      // Microphone: detects chainsaw noise = illegal logging\n"
-    "      isAlert   = data.sound_db > SOUND_THRESHOLD;\n"
-    "      alertType = 'illegal_logging';\n\n"
-    "    } else if (sensor_type === 'flame') {\n"
-    "      // Flame sensor: detects fire via flame flag OR high temperature\n"
-    "      isAlert   = data.flame_detected === true ||\n"
-    "                  data.temperature_c  > TEMP_THRESHOLD;\n"
-    "      alertType = 'fire';\n"
-    "    }\n\n"
-    "    if (!isAlert) return null;\n\n"
-    "    // Deduplication: suppress if same device alerted recently\n"
-    "    const duplicate = await alertModel.recentlyAlerted(\n"
-    "      device_id, DEDUP_MINUTES\n"
-    "    );\n"
-    "    if (duplicate) {\n"
-    + "      console.log(" + BT + "[AlertService] Suppressed duplicate: ${device_id} (${sensor_type})" + BT + ");\n"
-    "      return null;\n"
-    "    }\n\n"
-    "    const alert = await alertModel.create({ ...data, alert_type: alertType });\n\n"
-    "    const detail = sensor_type === 'microphone'\n"
-    + "      ? " + BT + "sound: ${data.sound_db}dB (threshold: ${SOUND_THRESHOLD}dB)" + BT + "\n"
-    + "      : " + BT + "flame: ${data.flame_detected} | temp: ${data.temperature_c}C (threshold: ${TEMP_THRESHOLD}C)" + BT + ";\n\n"
-    + "    console.log(" + BT + "[AlertService] ${alertType.toUpperCase()} ALERT -> ${device_id} | ${data.zone} | ${detail}" + BT + ");\n"
-    "    return alert;\n"
-    "  },\n\n"
-    "};\n\n"
-    "module.exports = alertService;\n"
-))
-
-# ─────────────────────────────────────────────────────────────
-# 5. UPDATE .env.example with new thresholds
-# ─────────────────────────────────────────────────────────────
-print("\n[5/7] Updating .env.example...")
-
-overwrite("backend/.env.example", (
-    "PORT=5000\n"
-    "NODE_ENV=development\n"
-    "DATABASE_URL=postgresql://postgres:[PASSWORD]@db.[REF].supabase.co:5432/postgres\n"
-    "DATABASE_URL_SESSION=postgresql://postgres.[REF]:[PASSWORD]@aws-0-eu-west-1.pooler.supabase.com:5432/postgres\n"
-    "SUPABASE_URL=https://[REF].supabase.co\n"
-    "SUPABASE_ANON_KEY=your-anon-key\n"
-    "SUPABASE_SERVICE_KEY=your-service-key\n"
-    "JWT_SECRET=your-jwt-secret\n"
-    "MQTT_BROKER=mqtt://localhost:1883\n"
-    "MQTT_TOPIC=forest/sensor/data\n"
-    "SOUND_THRESHOLD_DB=80\n"
-    "TEMP_THRESHOLD_C=55\n"
-    "DEDUP_MINUTES=5\n"
-    "FRONTEND_URL=http://localhost:5173\n"
-))
-
-# ─────────────────────────────────────────────────────────────
-# 6. SIMULATOR — full rewrite with both sensor types
-#    + auto backend detection (Render cloud or local)
-# ─────────────────────────────────────────────────────────────
-print("\n[6/7] Rewriting simulator with both sensor types + backend detection...")
-
-overwrite("simulator/mqtt_simulator.py", (
-    "#!/usr/bin/env python3\n"
-    "\"\"\"\n"
-    "SmartForest MQTT IoT Simulator\n"
-    "\n"
-    "Simulates TWO sensor types in Kibiti forest zones:\n"
-    "\n"
-    "  MICROPHONE sensors (MIC-001 to MIC-003)\n"
-    "    -> Detect abnormal sounds such as chainsaw noise\n"
-    "    -> Associated with illegal logging activities\n"
-    "    -> Field: sound_db (alert if > 80 dB)\n"
-    "\n"
-    "  FLAME sensors (FLAME-001 to FLAME-002)\n"
-    "    -> Detect fire incidents within forest areas\n"
-    "    -> Fields: flame_detected (bool) + temperature_c (alert if > 55C)\n"
-    "\n"
-    "Backend detection order:\n"
-    "  1. Try BACKEND_URL env var (if set manually)\n"
-    "  2. Try Render.com cloud URL (CLOUD_BACKEND_URL env var)\n"
-    "  3. Fall back to local backend (http://localhost:5000)\n"
-    "\n"
-    "Usage:\n"
-    "  source venv/bin/activate\n"
-    "  python mqtt_simulator.py\n"
-    "\n"
-    "Env vars:\n"
-    "  MQTT_BROKER_HOST    default: localhost\n"
-    "  MQTT_BROKER_PORT    default: 1883\n"
-    "  MQTT_TOPIC          default: forest/sensor/data\n"
-    "  CLOUD_BACKEND_URL   your Render backend URL\n"
-    "  SEND_INTERVAL       default: 5 (seconds)\n"
-    "  SPIKE_CHANCE        default: 0.20\n"
-    "\"\"\"\n\n"
-    "import paho.mqtt.client as mqtt\n"
-    "import json, random, time, os, sys\n"
-    "import urllib.request\n"
-    "import urllib.error\n"
-    "from datetime import datetime, timezone\n\n"
-    "# ── Config ───────────────────────────────────────────────\n"
-    "BROKER       = os.getenv('MQTT_BROKER_HOST',   'localhost')\n"
-    "PORT         = int(os.getenv('MQTT_BROKER_PORT', 1883))\n"
-    "TOPIC        = os.getenv('MQTT_TOPIC',          'forest/sensor/data')\n"
-    "INTERVAL     = float(os.getenv('SEND_INTERVAL',  5))\n"
-    "SPIKE_CHANCE = float(os.getenv('SPIKE_CHANCE',   0.20))\n"
-    "CLOUD_URL    = os.getenv('CLOUD_BACKEND_URL',   '').rstrip('/')\n"
-    "LOCAL_URL    = 'http://localhost:5000'\n\n"
-    "# ── Sensor definitions ───────────────────────────────────\n"
-    "ZONES = [\n"
-    "    {'zone': 'Kibiti-North', 'lat': -7.72, 'lng': 38.95},\n"
-    "    {'zone': 'Kibiti-South', 'lat': -7.85, 'lng': 38.88},\n"
-    "    {'zone': 'Kibiti-East',  'lat': -7.78, 'lng': 39.05},\n"
-    "]\n\n"
-    "MICROPHONE_SENSORS = ['MIC-001', 'MIC-002', 'MIC-003']\n"
-    "FLAME_SENSORS      = ['FLAME-001', 'FLAME-002']\n\n"
-    "# ── Backend health check ─────────────────────────────────\n"
-    "def check_backend(url, timeout=4):\n"
-    "    try:\n"
-    "        req = urllib.request.urlopen(\n"
-    "            url + '/api/health', timeout=timeout\n"
-    "        )\n"
-    "        return req.status == 200\n"
-    "    except Exception:\n"
-    "        return False\n\n"
-    "def resolve_backend():\n"
-    "    manual = os.getenv('BACKEND_URL', '').rstrip('/')\n"
-    "    if manual:\n"
-    "        if check_backend(manual):\n"
-    "            print(f'[SIM] Backend: manual override -> {manual}')\n"
-    "            return manual\n"
-    "        print(f'[SIM] WARNING: BACKEND_URL {manual} is not reachable')\n\n"
-    "    if CLOUD_URL:\n"
-    "        if check_backend(CLOUD_URL):\n"
-    "            print(f'[SIM] Backend: cloud (Render) -> {CLOUD_URL}')\n"
-    "            return CLOUD_URL\n"
-    "        print(f'[SIM] Cloud backend unreachable: {CLOUD_URL}')\n\n"
-    "    if check_backend(LOCAL_URL, timeout=2):\n"
-    "        print(f'[SIM] Backend: local -> {LOCAL_URL}')\n"
-    "        return LOCAL_URL\n\n"
-    "    print('[SIM] WARNING: No backend reachable.')\n"
-    "    print('      Data will be published to MQTT only.')\n"
-    "    print('      Start backend: cd backend && npm run dev')\n"
-    "    return None\n\n"
-    "# ── Payload generators ───────────────────────────────────\n"
-    "def make_microphone_payload(spike):\n"
-    "    zone = random.choice(ZONES)\n"
-    "    return {\n"
-    "        'device_id'   : random.choice(MICROPHONE_SENSORS),\n"
-    "        'sensor_type' : 'microphone',\n"
-    "        'timestamp'   : datetime.now(timezone.utc).isoformat(),\n"
-    "        'zone'        : zone['zone'],\n"
-    "        'latitude'    : round(zone['lat'] + random.uniform(-0.01, 0.01), 6),\n"
-    "        'longitude'   : round(zone['lng'] + random.uniform(-0.01, 0.01), 6),\n"
-    "        # Normal ambient forest sound: 20-60 dB\n"
-    "        # Chainsaw / illegal logging:  82-98 dB  (alert threshold: 80 dB)\n"
-    "        'sound_db'    : round(\n"
-    "            random.uniform(82, 98) if spike\n"
-    "            else random.uniform(20, 60), 2\n"
-    "        ),\n"
-    "    }\n\n"
-    "def make_flame_payload(spike):\n"
-    "    zone = random.choice(ZONES)\n"
-    "    fire = spike\n"
-    "    return {\n"
-    "        'device_id'      : random.choice(FLAME_SENSORS),\n"
-    "        'sensor_type'    : 'flame',\n"
-    "        'timestamp'      : datetime.now(timezone.utc).isoformat(),\n"
-    "        'zone'           : zone['zone'],\n"
-    "        'latitude'       : round(zone['lat'] + random.uniform(-0.01, 0.01), 6),\n"
-    "        'longitude'      : round(zone['lng'] + random.uniform(-0.01, 0.01), 6),\n"
-    "        # Normal forest temp: 22-40 C\n"
-    "        # Fire detected:      58-95 C  (alert threshold: 55 C)\n"
-    "        'flame_detected' : fire,\n"
-    "        'temperature_c'  : round(\n"
-    "            random.uniform(58, 95) if fire\n"
-    "            else random.uniform(22, 40), 2\n"
-    "        ),\n"
-    "    }\n\n"
-    "# ── HTTP POST to backend (redundant delivery) ────────────\n"
-    "def post_to_backend(backend_url, payload):\n"
-    "    if not backend_url:\n"
-    "        return\n"
-    "    try:\n"
-    "        data = json.dumps(payload).encode('utf-8')\n"
-    "        req  = urllib.request.Request(\n"
-    "            backend_url + '/api/sensors',\n"
-    "            data    = data,\n"
-    "            headers = {'Content-Type': 'application/json'},\n"
-    "            method  = 'POST'\n"
-    "        )\n"
-    "        urllib.request.urlopen(req, timeout=3)\n"
-    "    except Exception as e:\n"
-    "        print(f'  [HTTP] POST failed: {e}')\n\n"
-    "# ── MQTT callbacks ───────────────────────────────────────\n"
-    "def on_connect(client, userdata, flags, reason_code, properties):\n"
-    "    if reason_code == 0:\n"
-    "        print(f'[MQTT] Connected to broker at {BROKER}:{PORT}')\n"
-    "    else:\n"
-    "        print(f'[MQTT] Connection failed: reason code {reason_code}')\n"
-    "        sys.exit(1)\n\n"
-    "def on_disconnect(client, userdata, flags, reason_code, properties):\n"
-    "    if reason_code != 0:\n"
-    "        print(f'[MQTT] Disconnected ({reason_code}) - retrying...')\n\n"
-    "# ── Setup MQTT client ────────────────────────────────────\n"
-    "client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)\n"
-    "client.on_connect    = on_connect\n"
-    "client.on_disconnect = on_disconnect\n\n"
-    "print('[SIM] SmartForest Simulator starting...')\n"
-    "print(f'[SIM] Sensor types: MICROPHONE (chainsaw/logging) + FLAME (fire)')\n"
-    "print()\n\n"
-    "# ── Resolve backend URL ──────────────────────────────────\n"
-    "backend_url = resolve_backend()\n\n"
-    "# ── Connect to MQTT broker ───────────────────────────────\n"
-    "print(f'[MQTT] Connecting to {BROKER}:{PORT} ...')\n"
-    "try:\n"
-    "    client.connect(BROKER, PORT, keepalive=60)\n"
-    "except Exception as e:\n"
-    "    print(f'[MQTT] ERROR: Cannot connect -> {e}')\n"
-    "    print('       Start Mosquitto: sudo apt install mosquitto -y')\n"
-    "    print('       Then run: mosquitto -c mosquitto.conf')\n"
-    "    sys.exit(1)\n\n"
-    "client.loop_start()\n"
-    "time.sleep(1)\n\n"
-    "print(f'[SIM] Topic    : {TOPIC}')\n"
-    "print(f'[SIM] Interval : {INTERVAL}s | Spike chance: {int(SPIKE_CHANCE*100)}%')\n"
-    "print(f'[SIM] Press Ctrl+C to stop')\n"
-    "print('-' * 65)\n\n"
-    "readings = 0\n"
-    "alerts   = 0\n\n"
-    "try:\n"
-    "    while True:\n"
-    "        spike = random.random() < SPIKE_CHANCE\n\n"
-    "        # Alternate between microphone and flame sensor each cycle\n"
-    "        # so both types flow into the DB regularly\n"
-    "        if readings % 2 == 0:\n"
-    "            payload = make_microphone_payload(spike)\n"
-    "            label   = (\n"
-    "                f\"LOGGING-ALERT sound:{payload['sound_db']}dB\"\n"
-    "                if spike else\n"
-    "                f\"mic-ok   sound:{payload['sound_db']}dB\"\n"
-    "            )\n"
-    "        else:\n"
-    "            payload = make_flame_payload(spike)\n"
-    "            label   = (\n"
-    "                f\"FIRE-ALERT   temp:{payload['temperature_c']}C flame:YES\"\n"
-    "                if spike else\n"
-    "                f\"flame-ok temp:{payload['temperature_c']}C\"\n"
-    "            )\n\n"
-    "        # 1. Publish to MQTT (backend subscribes)\n"
-    "        client.publish(TOPIC, json.dumps(payload))\n\n"
-    "        # 2. Also POST directly to backend HTTP (redundancy)\n"
-    "        post_to_backend(backend_url, payload)\n\n"
-    "        readings += 1\n"
-    "        if spike:\n"
-    "            alerts += 1\n\n"
-    "        ts = datetime.now().strftime('%H:%M:%S')\n"
-    "        print(\n"
-    "            f\"{ts} | {label:<45} | \"\n"
-    "            f\"{payload['zone']:<14} | \"\n"
-    "            f\"r:{readings} a:{alerts}\"\n"
-    "        )\n\n"
-    "        time.sleep(INTERVAL)\n\n"
-    "except KeyboardInterrupt:\n"
-    "    print(f'\\n[SIM] Stopped. Readings: {readings} | Alerts triggered: {alerts}')\n"
-    "    client.loop_stop()\n"
-    "    client.disconnect()\n"
-))
-
-# ─────────────────────────────────────────────────────────────
-# 7. UPDATED SIMULATOR TESTS
-# ─────────────────────────────────────────────────────────────
-print("\n[7/7] Updating simulator tests + creating daily test flow script...")
-
-overwrite("simulator/tests/test_simulator.py", (
-    "\"\"\"Unit tests for simulator payload structure — both sensor types.\"\"\"\n"
-    "import json\n"
-    "from datetime import datetime, timezone\n\n"
-    "ZONES = [{'zone': 'Kibiti-North', 'lat': -7.72, 'lng': 38.95}]\n\n\n"
-    "def make_microphone_payload(spike=False):\n"
-    "    zone = ZONES[0]\n"
-    "    return {\n"
-    "        'device_id'   : 'MIC-001',\n"
-    "        'sensor_type' : 'microphone',\n"
-    "        'timestamp'   : datetime.now(timezone.utc).isoformat(),\n"
-    "        'zone'        : zone['zone'],\n"
-    "        'latitude'    : zone['lat'],\n"
-    "        'longitude'   : zone['lng'],\n"
-    "        'sound_db'    : 90.0 if spike else 40.0,\n"
-    "    }\n\n\n"
-    "def make_flame_payload(spike=False):\n"
-    "    zone = ZONES[0]\n"
-    "    return {\n"
-    "        'device_id'      : 'FLAME-001',\n"
-    "        'sensor_type'    : 'flame',\n"
-    "        'timestamp'      : datetime.now(timezone.utc).isoformat(),\n"
-    "        'zone'           : zone['zone'],\n"
-    "        'latitude'       : zone['lat'],\n"
-    "        'longitude'      : zone['lng'],\n"
-    "        'flame_detected' : spike,\n"
-    "        'temperature_c'  : 72.5 if spike else 28.0,\n"
-    "    }\n\n\n"
-    "# ── Microphone tests ─────────────────────────────────────\n"
-    "def test_mic_payload_has_required_fields():\n"
-    "    p = make_microphone_payload()\n"
-    "    for f in ['device_id','sensor_type','timestamp',\n"
-    "              'zone','latitude','longitude','sound_db']:\n"
-    "        assert f in p, f'Missing: {f}'\n\n\n"
-    "def test_mic_sensor_type_is_microphone():\n"
-    "    assert make_microphone_payload()['sensor_type'] == 'microphone'\n\n\n"
-    "def test_mic_spike_exceeds_threshold():\n"
-    "    p = make_microphone_payload(spike=True)\n"
-    "    assert p['sound_db'] > 80, 'Spike should exceed 80dB threshold'\n\n\n"
-    "def test_mic_normal_below_threshold():\n"
-    "    p = make_microphone_payload(spike=False)\n"
-    "    assert p['sound_db'] < 80, 'Normal reading should be below 80dB'\n\n\n"
-    "def test_mic_sound_db_is_float():\n"
-    "    assert isinstance(make_microphone_payload()['sound_db'], float)\n\n\n"
-    "# ── Flame sensor tests ───────────────────────────────────\n"
-    "def test_flame_payload_has_required_fields():\n"
-    "    p = make_flame_payload()\n"
-    "    for f in ['device_id','sensor_type','timestamp',\n"
-    "              'zone','latitude','longitude',\n"
-    "              'flame_detected','temperature_c']:\n"
-    "        assert f in p, f'Missing: {f}'\n\n\n"
-    "def test_flame_sensor_type_is_flame():\n"
-    "    assert make_flame_payload()['sensor_type'] == 'flame'\n\n\n"
-    "def test_flame_spike_triggers_alert():\n"
-    "    p = make_flame_payload(spike=True)\n"
-    "    assert p['flame_detected'] is True or p['temperature_c'] > 55\n\n\n"
-    "def test_flame_normal_no_alert():\n"
-    "    p = make_flame_payload(spike=False)\n"
-    "    assert p['flame_detected'] is False\n"
-    "    assert p['temperature_c'] < 55\n\n\n"
-    "def test_flame_temperature_is_float():\n"
-    "    assert isinstance(make_flame_payload()['temperature_c'], float)\n\n\n"
-    "# ── Payload JSON serializable ────────────────────────────\n"
-    "def test_mic_payload_json_serializable():\n"
-    "    p = make_microphone_payload(spike=True)\n"
-    "    assert json.dumps(p)  # should not raise\n\n\n"
-    "def test_flame_payload_json_serializable():\n"
-    "    p = make_flame_payload(spike=True)\n"
-    "    assert json.dumps(p)\n"
-))
-
-# ── Daily test flow script ───────────────────────────────────
-overwrite("run_test_flow.sh", (
-    "#!/usr/bin/env bash\n"
-    "# ============================================================\n"
-    "# SmartForest Daily Testing Flow\n"
-    "# Run from SmartForest ROOT: bash run_test_flow.sh\n"
-    "# ============================================================\n"
-    "# Flow:\n"
-    "#  1. Check backend (Render cloud first, local fallback)\n"
-    "#  2. Run backend unit tests\n"
-    "#  3. Run simulator pytest tests\n"
-    "#  4. Start MQTT broker (if not running)\n"
-    "#  5. Start backend locally (if cloud not available)\n"
-    "#  6. Start simulator -> triggers MQTT -> backend -> Supabase\n"
-    "#  7. Verify data in DB via API calls\n"
-    "# ============================================================\n\n"
-    "set -e\n\n"
-    "CLOUD_URL=\"${CLOUD_BACKEND_URL:-}\"\n"
-    "LOCAL_URL=\"http://localhost:5000\"\n"
-    "BACKEND_URL=\"\"\n\n"
-    "echo \"\"\n"
-    "echo \"============================================================\"\n"
-    "echo \" SmartForest Daily Test Flow\"\n"
-    "echo \"============================================================\"\n\n"
-    "# ── Step 1: Detect active backend ───────────────────────\n"
-    "echo \"\"\n"
-    "echo \"[1/5] Detecting active backend...\"\n"
-    "if [ -n \"$CLOUD_URL\" ]; then\n"
-    "    STATUS=$(curl -s -o /dev/null -w \"%{http_code}\" \\\n"
-    "             --connect-timeout 4 \"$CLOUD_URL/api/health\" || echo \"000\")\n"
-    "    if [ \"$STATUS\" = \"200\" ]; then\n"
-    "        BACKEND_URL=\"$CLOUD_URL\"\n"
-    "        echo \"  Backend: CLOUD (Render) -> $CLOUD_URL\"\n"
-    "    else\n"
-    "        echo \"  Cloud backend not reachable (status: $STATUS)\"\n"
-    "    fi\n"
-    "fi\n\n"
-    "if [ -z \"$BACKEND_URL\" ]; then\n"
-    "    STATUS=$(curl -s -o /dev/null -w \"%{http_code}\" \\\n"
-    "             --connect-timeout 2 \"$LOCAL_URL/api/health\" || echo \"000\")\n"
-    "    if [ \"$STATUS\" = \"200\" ]; then\n"
-    "        BACKEND_URL=\"$LOCAL_URL\"\n"
-    "        echo \"  Backend: LOCAL -> $LOCAL_URL\"\n"
-    "    else\n"
-    "        echo \"  Local backend not running. Starting it...\"\n"
-    "        echo \"  Run in a new terminal: cd backend && npm run dev\"\n"
-    "        echo \"  Then re-run this script.\"\n"
-    "        exit 1\n"
-    "    fi\n"
-    "fi\n\n"
-    "# ── Step 2: Backend unit tests ───────────────────────────\n"
-    "echo \"\"\n"
-    "echo \"[2/5] Running backend tests...\"\n"
-    "cd backend && npm test && cd ..\n"
-    "echo \"  Backend tests: PASSED\"\n\n"
-    "# ── Step 3: Simulator pytest ─────────────────────────────\n"
-    "echo \"\"\n"
-    "echo \"[3/5] Running simulator tests...\"\n"
-    "cd simulator\n"
-    "if [ ! -d venv ]; then\n"
-    "    echo \"  Creating venv...\"\n"
-    "    python3 -m venv venv\n"
-    "    source venv/bin/activate\n"
-    "    pip install -r requirements.txt -q\n"
-    "else\n"
-    "    source venv/bin/activate\n"
-    "fi\n"
-    "pytest tests/ -v\n"
-    "cd ..\n"
-    "echo \"  Simulator tests: PASSED\"\n\n"
-    "# ── Step 4: Verify API endpoints ─────────────────────────\n"
-    "echo \"\"\n"
-    "echo \"[4/5] Verifying API endpoints...\"\n"
-    "echo \"\"\n\n"
-    "echo \"  GET /api/health\"\n"
-    "curl -s \"$BACKEND_URL/api/health\" | python3 -m json.tool\n\n"
-    "echo \"\"\n"
-    "echo \"  GET /api/sensors (last 3)\"\n"
-    "curl -s \"$BACKEND_URL/api/sensors\" | \\\n"
-    "    python3 -c \"import sys,json; d=json.load(sys.stdin); \\\n"
-    "    [print('   ',r.get('device_id'),r.get('sensor_type'),\\\n"
-    "    r.get('sound_db',''),r.get('temperature_c','')) for r in d[:3]]\"\n\n"
-    "echo \"\"\n"
-    "echo \"  GET /api/alerts/count\"\n"
-    "curl -s \"$BACKEND_URL/api/alerts/count\" | python3 -m json.tool\n\n"
-    "echo \"\"\n"
-    "echo \"  GET /api/alerts (last 3)\"\n"
-    "curl -s \"$BACKEND_URL/api/alerts\" | \\\n"
-    "    python3 -c \"import sys,json; d=json.load(sys.stdin); \\\n"
-    "    [print('   ',a.get('alert_type'),a.get('device_id'),\\\n"
-    "    a.get('zone'),a.get('status')) for a in d[:3]]\"\n\n"
-    "# ── Step 5: Start simulator ───────────────────────────────\n"
-    "echo \"\"\n"
-    "echo \"[5/5] Starting simulator (Ctrl+C to stop)...\"\n"
-    "echo \"      Watch Supabase Table Editor for new rows:\"\n"
-    "echo \"      https://supabase.com/dashboard/project/mcnhuvfbtsddtnuwatkj/editor\"\n"
-    "echo \"\"\n"
-    "cd simulator\n"
-    "source venv/bin/activate\n"
-    "CLOUD_BACKEND_URL=\"$CLOUD_URL\" python mqtt_simulator.py\n"
-))
-
-# make the shell script executable note (just remind user)
-print("\nDone!\n")
-print("=" * 60)
-print("  patch_sensors_upgrade.py completed")
-print("=" * 60)
 print("""
-WHAT CHANGED:
-  - DB: sensor_readings + alerts now have sensor_type + alert_type
-  - MICROPHONE sensors (MIC-001 to MIC-003)
-      detect chainsaw noise -> illegal_logging alert (> 80dB)
-  - FLAME sensors (FLAME-001 to FLAME-002)
-      detect fire -> fire alert (flame=true OR temp > 55C)
-  - Simulator alternates both types every cycle
-  - Simulator auto-resolves backend: Render -> local -> MQTT only
-  - Simulator sends via MQTT + HTTP POST (redundancy)
-  - 12 simulator pytest tests (6 mic + 6 flame)
-  - Daily test flow script: run_test_flow.sh
-
-NEXT STEPS:
-  1. Run migrations in Supabase SQL Editor (in order):
-       database/migrations/001_create_users.sql
-       database/migrations/002_create_sensor_readings.sql
-       database/migrations/003_create_alerts.sql
-
-  2. (Optional) add to backend/.env:
-       TEMP_THRESHOLD_C=55
-       DEDUP_MINUTES=5
-
-  3. Daily testing flow:
-       # Set your Render URL (optional):
-       export CLOUD_BACKEND_URL=https://your-app.onrender.com
-
-       # Run everything:
-       bash run_test_flow.sh
-
-  4. Or manually:
-       Terminal 1: mosquitto -c mosquitto.conf
-       Terminal 2: cd backend && npm run dev
-       Terminal 3: cd simulator && source venv/bin/activate
-                   python mqtt_simulator.py
-       Terminal 4: watch -n5 curl -s localhost:5000/api/alerts/count
-
-  5. Commit and push:
-       git add .
-       git commit -m "feat: dual sensor types mic+flame, smart backend detection"
-       git push origin develop
+Done! Now:
+  git add .
+  git commit -m "ci: inject secrets as env vars, mock supabase+db in tests"
+  git push origin develop
 """)
-
