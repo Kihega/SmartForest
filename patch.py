@@ -1,36 +1,56 @@
 #!/usr/bin/env python3
-"""
-Create the missing backend/src/config/database.js file
-Usage: python3 patch.py
-"""
 
 import os
+from pathlib import Path
 
-def create_database_config():
-    file_path = 'backend/src/config/database.js'
-    
-    # Create directories if they don't exist
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    
-    content = '''// Database configuration and connection pool
-const { Pool } = require('pg');
+ROOT = Path.cwd()
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://localhost/smartforest'
-});
+KEYWORDS = [
+    "vibration",
+    "sound_db",
+    "device_id",
+    "zone",
+]
 
-module.exports = {
-  query: (text, params) => pool.query(text, params),
-  execute: (text, params) => pool.query(text, params),
-  pool
-};
-'''
-    
-    with open(file_path, 'w') as f:
-        f.write(content)
-    
-    print(f"✅ Created {file_path}")
-    print("   This file exports query/execute functions that Jest can mock")
+EXTENSIONS = {
+    ".js",
+    ".ts",
+    ".jsx",
+    ".tsx",
+    ".json",
+    ".sql",
+    ".prisma",
+}
 
-if __name__ == '__main__':
-    create_database_config()
+print(f"\nScanning project: {ROOT}\n")
+
+for path in ROOT.rglob("*"):
+    if not path.is_file():
+        continue
+
+    if path.suffix not in EXTENSIONS:
+        continue
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        continue
+
+    matches = []
+
+    for kw in KEYWORDS:
+        if kw in text:
+            matches.append(kw)
+
+    if matches:
+        print("=" * 80)
+        print(path)
+        print("Found:", ", ".join(matches))
+
+        lines = text.splitlines()
+
+        for i, line in enumerate(lines, start=1):
+            if any(kw in line for kw in matches):
+                print(f"{i:4d}: {line}")
+
+print("\nDone.")

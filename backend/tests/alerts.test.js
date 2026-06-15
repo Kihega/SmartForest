@@ -1,5 +1,5 @@
-jest.mock('../src/config/database', () => ({
-  query: jest.fn().mockResolvedValue({ rows: [] })
+jest.mock('../src/config/db', () => ({
+  query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 })
 }));
 
 const request = require('supertest');

@@ -1,4 +1,5 @@
-// Jest setup - mock Supabase and database models
+// Jest setup - mock all external dependencies
+
 jest.mock('./src/config/supabase', () => ({
   auth: {
     signInWithPassword: jest.fn().mockResolvedValue({
@@ -52,6 +53,14 @@ jest.mock('./src/models/userModel', () => ({
   })
 }));
 
+jest.mock('mqtt', () => ({
+  connect: jest.fn().mockReturnValue({
+    on: jest.fn(),
+    subscribe: jest.fn(),
+    publish: jest.fn(),
+    disconnect: jest.fn(),
+  })
+}));
 
 // Suppress console noise during tests
 global.console.error = jest.fn();

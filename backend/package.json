@@ -15,9 +15,6 @@
     "forceExit": true,
     "silent": true,
     "testTimeout": 10000,
-    "setupFiles": [
-      "./jest.setup.js"
-    ],
     "setupFilesAfterEnv": [
       "<rootDir>/jest.setup.js"
     ],
