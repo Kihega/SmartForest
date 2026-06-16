@@ -16,16 +16,16 @@ app.use(express.json());
 app.use('/api/alerts',  require('./routes/alerts'));
 app.use('/api/sensors', require('./routes/sensors'));
 app.use('/api/auth',    require('./routes/auth'));
+app.use('/api/devices', require('./routes/devices'));
+app.use('/api/admin',   require('./routes/admin'));
 
 // Health check
-app.get('/api/health', (req, res) => {
+app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Global error handler (must be last)
 app.use(errorHandler);
 
-// Only start server + MQTT when not in test mode
 let server;
 if (process.env.NODE_ENV !== 'test') {
   connectMQTT();
