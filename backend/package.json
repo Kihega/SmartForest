@@ -8,7 +8,13 @@
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
     "test": "jest",
-    "test:verbose": "jest --verbose"
+    "test:verbose": "jest --verbose",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:push": "prisma db push",
+    "db:seed": "prisma db seed",
+    "db:studio": "prisma studio",
+    "postinstall": "prisma generate"
   },
   "jest": {
     "testEnvironment": "node",
@@ -32,11 +38,17 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "mqtt": "^5.15.1",
-    "pg": "^8.21.0"
+    "pg": "^8.21.0",
+    "@prisma/client": "^5.14.0"
   },
   "devDependencies": {
     "jest": "^30.4.2",
     "nodemon": "^3.1.14",
-    "supertest": "^7.2.2"
+    "supertest": "^7.2.2",
+    "prisma": "^5.14.0"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma",
+    "seed": "node prisma/seed.js"
   }
 }

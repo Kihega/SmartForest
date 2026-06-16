@@ -1,0 +1,93 @@
+// SmartForest Prisma Schema
+// CONNECTION POOLER STRATEGY (Supabase - no direct host needed):
+//   DATABASE_URL        -> Transaction pooler port 6543  (runtime queries)
+//   DATABASE_URL_DIRECT -> Session pooler     port 5432  (prisma db push/migrate)
+//
+// Both use aws-0-*.pooler.supabase.com — avoids paid IPv4 add-on for
+// the direct db.xxx.supabase.co:5432 host.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_DIRECT")
+}
+
+// phone is stored in Supabase user_metadata — not in this table yet.
+// Run 006_add_phone_to_users.sql + uncomment phone field when ready.
+model User {
+  id         Int      @id @default(autoincrement())
+  name       String?  @db.VarChar(100)
+  email      String   @unique @db.VarChar(100)
+  role       String   @default("customer") @db.VarChar(20)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  devices        Device[]
+  resolvedAlerts Alert[]  @relation("ResolvedBy")
+
+  @@map("users")
+}
+
+model SensorReading {
+  id            Int      @id @default(autoincrement())
+  deviceId      String   @db.VarChar(50)  @map("device_id")
+  sensorType    String   @default("microphone") @db.VarChar(20) @map("sensor_type")
+  zone          String?  @db.VarChar(100)
+  latitude      Float?
+  longitude     Float?
+  soundDb       Decimal? @db.Decimal(5, 2) @map("sound_db")
+  flameDetected Boolean  @default(false)   @map("flame_detected")
+  temperatureC  Decimal? @db.Decimal(5, 2) @map("temperature_c")
+  isAlert       Boolean  @default(false)   @map("is_alert")
+  recordedAt    DateTime @default(now())   @map("recorded_at")
+
+  @@index([deviceId],               map: "idx_sr_device")
+  @@index([recordedAt(sort: Desc)], map: "idx_sr_time")
+  @@index([sensorType],             map: "idx_sr_type")
+  @@map("sensor_readings")
+}
+
+model Alert {
+  id            Int      @id @default(autoincrement())
+  deviceId      String?  @db.VarChar(50)  @map("device_id")
+  sensorType    String   @default("microphone") @db.VarChar(20) @map("sensor_type")
+  alertType     String   @default("illegal_logging") @db.VarChar(30) @map("alert_type")
+  zone          String?  @db.VarChar(100)
+  latitude      Float?
+  longitude     Float?
+  soundDb       Decimal? @db.Decimal(5, 2) @map("sound_db")
+  flameDetected Boolean  @default(false)   @map("flame_detected")
+  temperatureC  Decimal? @db.Decimal(5, 2) @map("temperature_c")
+  status        String   @default("unresolved") @db.VarChar(20)
+  resolvedById  Int?                            @map("resolved_by")
+  createdAt     DateTime @default(now())        @map("created_at")
+
+  resolvedBy    User?    @relation("ResolvedBy", fields: [resolvedById], references: [id])
+
+  @@index([status],                 map: "idx_alerts_status")
+  @@index([createdAt(sort: Desc)],  map: "idx_alerts_time")
+  @@index([alertType],              map: "idx_alerts_type")
+  @@map("alerts")
+}
+
+model Device {
+  id        Int       @id @default(autoincrement())
+  deviceId  String    @unique @db.VarChar(50) @map("device_id")
+  ownerId   Int?                               @map("owner_id")
+  zone      String?   @db.VarChar(100)
+  latitude  Float?
+  longitude Float?
+  active    Boolean   @default(true)
+  lastSeen  DateTime?                          @map("last_seen")
+  createdAt DateTime  @default(now())          @map("created_at")
+
+  owner     User?     @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+
+  @@index([ownerId], map: "idx_devices_owner")
+  @@index([active],  map: "idx_devices_active")
+  @@map("devices")
+}

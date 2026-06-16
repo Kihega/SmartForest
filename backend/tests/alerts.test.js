@@ -1,7 +1,4 @@
-jest.mock('../src/config/db', () => ({
-  query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 })
-}));
-
+'use strict';
 const request = require('supertest');
 const { app } = require('../src/index');
 
@@ -20,16 +17,11 @@ describe('GET /api/alerts', () => {
     expect(Array.isArray(res.body)).toBe(true);
   });
 
-  it('each alert has required fields when data exists', async () => {
-    const res = await request(app).get('/api/alerts');
-    if (res.body.length > 0) {
-      const alert = res.body[0];
-      expect(alert).toHaveProperty('id');
-      expect(alert).toHaveProperty('zone');
-      expect(alert).toHaveProperty('status');
-    } else {
-      expect(res.body).toEqual([]);
-    }
+  it('count endpoint returns a number', async () => {
+    const res = await request(app).get('/api/alerts/count');
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toHaveProperty('count');
+    expect(typeof res.body.count).toBe('number');
   });
 });
 

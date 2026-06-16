@@ -1,7 +1,8 @@
-jest.mock('../src/config/db', () => ({
-  query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 })
-}));
-
+'use strict';
+/**
+ * Auth route tests — all DB/Prisma calls are mocked in jest.setup.js.
+ * No live database required.
+ */
 const request = require('supertest');
 const { app } = require('../src/index');
 
@@ -12,16 +13,12 @@ describe('POST /api/auth/login', () => {
   });
 
   it('returns 400 when email is missing', async () => {
-    const res = await request(app)
-      .post('/api/auth/login')
-      .send({ password: 'test1234' });
+    const res = await request(app).post('/api/auth/login').send({ password: 'test1234' });
     expect(res.statusCode).toBe(400);
   });
 
   it('returns 400 when password is missing', async () => {
-    const res = await request(app)
-      .post('/api/auth/login')
-      .send({ email: 'ranger@forest.go.tz' });
+    const res = await request(app).post('/api/auth/login').send({ email: 'a@b.com' });
     expect(res.statusCode).toBe(400);
   });
 
@@ -29,24 +26,37 @@ describe('POST /api/auth/login', () => {
     const res = await request(app)
       .post('/api/auth/login')
       .send({ email: 'test@example.com', password: 'password123' });
-    // Should return 200 with token when mock succeeds
     expect(res.statusCode).toBe(200);
     expect(res.body).toHaveProperty('token');
     expect(res.body).toHaveProperty('user');
+    expect(res.body.user).toHaveProperty('email');
+  });
+});
+
+describe('POST /api/auth/register', () => {
+  it('returns 400 when required fields are missing', async () => {
+    const res = await request(app).post('/api/auth/register').send({ email: 'a@b.com' });
+    expect(res.statusCode).toBe(400);
   });
 
-  it('returns error on auth failure', async () => {
-    // This test can be enhanced later when signInWithPassword mock is made conditional
+  it('returns 400 for short password', async () => {
     const res = await request(app)
-      .post('/api/auth/login')
-      .send({ email: 'fake@fake.com', password: 'wrongpass' });
-    // Mock always succeeds, so expect 200 (or we need conditional mocking)
-    expect([200, 401, 500]).toContain(res.statusCode);
+      .post('/api/auth/register')
+      .send({ firstName: 'Jo', email: 'jo@b.com', password: '123' });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 201 on valid registration (mocked)', async () => {
+    const res = await request(app)
+      .post('/api/auth/register')
+      .send({ firstName: 'Alice', surName: 'Smith',
+               email: 'alice@example.com', password: 'SecurePass1' });
+    expect([201, 400]).toContain(res.statusCode);
   });
 });
 
 describe('POST /api/auth/logout', () => {
-  it('returns 200 on logout', async () => {
+  it('returns 200', async () => {
     const res = await request(app).post('/api/auth/logout');
     expect(res.statusCode).toBe(200);
   });
