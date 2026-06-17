@@ -4,13 +4,11 @@ import { resolveBackend, resetBackend, BACKEND_CANDIDATES } from '../config/back
 
 export default function BackendStatus() {
   const [status,  setStatus]  = useState('checking')   // 'checking' | 'online' | 'offline'
-  const [backendUrl, setUrl]  = useState('')
 
   async function check() {
     setStatus('checking')
     try {
-      const url = await resolveBackend()
-      setUrl(url)
+      await resolveBackend()
       setStatus('online')
     } catch {
       setStatus('offline')

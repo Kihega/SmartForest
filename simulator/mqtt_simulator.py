@@ -66,7 +66,7 @@ TOPIC        = os.getenv('MQTT_TOPIC',        'forest/sensor/data')
 INTERVAL     = float(os.getenv('SEND_INTERVAL', 5))
 SPIKE_CHANCE = float(os.getenv('SPIKE_CHANCE',  0.20))
 USE_REAL_IDS = os.getenv('USE_REAL_IDS', 'false').lower() == 'true'
-SENTINEL     = Path(__file__).parent / 'STOP_SIMULATOR'
+SENTINEL     = Path(__file__).resolve().parent / 'STOP_SIMULATOR'
 
 PREFIX   = 'smf' if USE_REAL_IDS else 'smt'
 MIC_IDS  = [f'{PREFIX}-m{str(i).zfill(2)}a' for i in range(1, 4)]
@@ -156,8 +156,7 @@ def on_disconnect(client, userdata, flags, rc, props=None):
 
 def graceful_stop(sig, frame):
     global _running
-    print('
-[SIM] Stopping...')
+    print('\n[SIM] Stopping...')
     _running = False
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -270,8 +269,7 @@ def main():
 
         time.sleep(INTERVAL)
 
-    print(f'
-[SIM] Stopped. Total readings: {reads} | Alerts: {alerts_sent}')
+    print(f'\\n[SIM] Stopped. Total readings: {reads} | Alerts: {alerts_sent}')
     if client:
         client.loop_stop()
         client.disconnect()

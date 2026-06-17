@@ -1,8 +1,7 @@
-
-# SmartForest Simulator Tests
-============================
-Tests run without a live MQTT broker or backend.
 """
+SmartForest Simulator Tests
+"""
+
 import sys, os, json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 

@@ -1,5 +1,5 @@
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { getAPI } from '../config/backends.js'
 import SignupModal from '../components/SignupModal.jsx'
 
