@@ -1,19 +1,18 @@
-/* Shared top-bar — appears identically in user & admin dashboards */
+
 export default function Navbar({ session, alertCount, role }) {
   const user = session?.user || {}
   return (
     <nav style={nav}>
-      {/* left: logo + title */}
       <div style={left}>
-        <div style={logoCircle}>
-          <img src="/assets/logo.png" alt="Logo"
-            style={{ width:'100%', height:'100%', objectFit:'contain', borderRadius:'50%' }}
-            onError={e => { e.target.style.display='none' }} />
+        {/* Circular logo — same Facebook/GitHub style as login */}
+        <div style={logoRing}>
+          <img src="/assets/logo_circle.png" alt="SmartForest"
+            style={{ width:'100%', height:'100%', objectFit:'cover', objectPosition:'center top', display:'block' }}
+            onError={e => { e.target.src = '/assets/logo.png'; e.target.style.objectFit='cover' }} />
         </div>
-        <ArtTitle />
+        <NavTitle />
         <span style={roleTag}>{role === 'admin' ? '⚙ Admin' : '👤 User'}</span>
       </div>
-      {/* right: alert badge + user name */}
       <div style={right}>
         {alertCount > 0 && (
           <span style={alertBadge}>🚨 {alertCount} alert{alertCount !== 1 ? 's' : ''}</span>
@@ -24,18 +23,22 @@ export default function Navbar({ session, alertCount, role }) {
   )
 }
 
-function ArtTitle() {
+function NavTitle() {
   return (
-    <svg width="180" height="34" viewBox="0 0 180 34">
+    <svg width="160" height="32" viewBox="0 0 160 32" style={{ overflow:'visible' }}>
       <defs>
-        <linearGradient id="ntg" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#81c784"/>
-          <stop offset="100%" stopColor="#2e7d32"/>
+        <linearGradient id="nvGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%"   stopColor="#ffffff" />
+          <stop offset="40%"  stopColor="#a5d6a7" />
+          <stop offset="100%" stopColor="#69f0ae" />
         </linearGradient>
+        <filter id="nvGlow">
+          <feDropShadow dx="0" dy="1" stdDeviation="1.5" floodColor="#000" floodOpacity="0.3"/>
+        </filter>
       </defs>
-      <text x="0" y="28" fontFamily="Georgia, serif" fontWeight="900"
-        fontSize="28" fill="url(#ntg)" stroke="#1b5e20" strokeWidth="0.5"
-        style={{ fontStyle:'italic' }}>
+      <text x="0" y="26" fontFamily="Georgia,serif" fontWeight="900"
+        fontSize="26" fill="url(#nvGrad)" filter="url(#nvGlow)"
+        style={{ fontStyle:'italic', letterSpacing:0.5 }}>
         SmartForest
       </text>
     </svg>
@@ -43,19 +46,29 @@ function ArtTitle() {
 }
 
 const nav = {
-  background:'linear-gradient(90deg,#1b5e20,#2e7d32)',
+  background:'linear-gradient(90deg,#0a0a0a 0%,#1b5e20 50%,#2e7d32 100%)',
   color:'#fff', display:'flex', alignItems:'center',
-  justifyContent:'space-between', padding:'0 20px',
-  height:56, boxShadow:'0 2px 10px rgba(0,0,0,0.25)',
-  position:'sticky', top:0, zIndex:100,
+  justifyContent:'space-between', padding:'0 16px',
+  height:54, boxShadow:'0 2px 12px rgba(0,0,0,0.3)',
+  position:'sticky', top:0, zIndex:100, flexShrink:0,
 }
-const left       = { display:'flex', alignItems:'center', gap:12 }
-const right      = { display:'flex', alignItems:'center', gap:14 }
-const logoCircle = { width:36, height:36, borderRadius:'50%',
-  border:'2px solid rgba(255,255,255,0.5)', overflow:'hidden',
-  background:'rgba(255,255,255,0.15)', flexShrink:0 }
-const roleTag    = { background:'rgba(255,255,255,0.18)', borderRadius:20,
-  padding:'3px 10px', fontSize:11, fontWeight:700, letterSpacing:0.5 }
-const alertBadge = { background:'#e53935', color:'#fff',
-  borderRadius:20, padding:'3px 10px', fontSize:12, fontWeight:700 }
-const userLabel  = { fontSize:13, opacity:0.9 }
+const left       = { display:'flex', alignItems:'center', gap:10, minWidth:0 }
+const right      = { display:'flex', alignItems:'center', gap:12, flexShrink:0 }
+const logoRing   = {
+  width:36, height:36, borderRadius:'50%',
+  border:'2px solid rgba(255,255,255,0.6)',
+  boxShadow:'0 0 0 1px rgba(255,255,255,0.2)',
+  overflow:'hidden', flexShrink:0,
+  background:'rgba(255,255,255,0.1)',
+}
+const roleTag    = {
+  background:'rgba(255,255,255,0.15)', borderRadius:20,
+  padding:'3px 10px', fontSize:11, fontWeight:700, letterSpacing:0.5,
+  whiteSpace:'nowrap',
+}
+const alertBadge = {
+  background:'#e53935', color:'#fff',
+  borderRadius:20, padding:'3px 10px', fontSize:12, fontWeight:700,
+  animation:'pulse 2s infinite',
+}
+const userLabel  = { fontSize:13, opacity:0.9, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:160 }

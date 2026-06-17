@@ -1,8 +1,17 @@
--- MIGRATION 005: seed first admin user in the users table
--- NOTE: You must also create this user in Supabase Auth dashboard
---       (or via the Supabase CLI: supabase auth create-user)
---       Email: admin@smartforest.tz   Password: Admin@SmartForest2026
+
+-- MIGRATION 005 : Seed admin and ranger users
+-- Fallback SQL if Prisma seed (npx prisma db seed) fails.
+--
+-- These rows are the DB profile records only.
+-- Supabase Auth accounts must be created separately via:
+--   npx prisma db seed          (recommended — creates Auth + DB)
+--   OR: Supabase Auth dashboard (Authentication > Users > Add user)
+--
+-- Credentials: admin@smf.tz / smf@1234   ranger@smf.tz / smf@1234
 
 INSERT INTO users (name, email, role) VALUES
-  ('System Admin', 'admin@smartforest.tz', 'admin')
-ON CONFLICT (email) DO UPDATE SET role = 'admin';
+  ('System Admin', 'admin@smf.tz',  'admin'),
+  ('Field Ranger', 'ranger@smf.tz', 'customer')
+ON CONFLICT (email) DO UPDATE
+  SET name = EXCLUDED.name,
+      role = EXCLUDED.role;
