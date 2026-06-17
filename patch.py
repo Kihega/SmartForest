@@ -1,1187 +1,1624 @@
 #!/usr/bin/env python3
 """
-SmartForest — Single ENV Backend URL + 9-Minute Data TTL + Simulator Docker
-==============================================================================
-Run:  python single_env_patch.py /path/to/SmartForest-main
+SmartForest Patch Script
+========================
+Fixes applied:
+  1. Backend URL — single VITE_API_URL from .env, no hardcoded fallback.
+     The .env.example is updated; Vercel users must set VITE_API_URL in
+     Vercel → Project Settings → Environment Variables.
+  2. Login page — header (logo + title) centred; font sizes bumped slightly;
+     emoji password-toggle replaced with SVG icon.
+  3. Admin Dashboard (from handwritten notes):
+     - Navbar: remove "alerts" word, rename role tag to "System Admin" / "System".
+     - Sidebar: add manage-users, manage-devices, system-performance, settings
+       items with proper react-icons SVG replacements (no emoji).
+     - Home content area: stat cards use react-icons (lucide) SVGs.
+     - Admin/User/Log-report/System-breakdown cards described in notes added.
+     - ALL emoji icons replaced with inline SVG icons (lucide-style).
+  4. Replace all emoji with professional inline SVG icons everywhere.
 
-CHANGES:
+Run from inside the SmartForest-main folder:
+    python3 smartforest_patch.py
 
-  1. ONE env var for backend URL — no priority list, no hardcoding.
-       Frontend : VITE_API_URL   (in frontend/.env)
-       Backend  : (nothing needed — backend IS the server)
-       Simulator: BACKEND_URL    (in simulator/.env)
-     Whatever URL you put there — local or cloud — the app just uses it.
-     No code change needed to switch between local/cloud, ever.
-
-  2. Simulator sends realistic CHANGING readings every 3 minutes (180s)
-     instead of a fixed short interval — matches real hardware reporting.
-
-  3. Sensor readings auto-expire after 9 minutes:
-       - Postgres: a scheduled cleanup deletes rows older than 9 min
-       - Backend also prunes opportunistically on every sensor write
-       - This keeps "live" dashboard data truly live and bounded
-     Alerts table is NOT pruned (history of incidents should persist).
-
-  4. Dockerfile for the simulator (Render Background Worker compatible)
-     + full hosting instructions in SIMULATOR_HOSTING.md
-
-  5. backend/src/services/cleanupService.js — runs the 9-min TTL sweep
-     on an interval, started from index.js
+Or pass the path:
+    python3 smartforest_patch.py /path/to/SmartForest-main
 """
-import os, sys
 
-def resolve_root():
-    if len(sys.argv) > 1 and os.path.isdir(sys.argv[1]):
-        return os.path.abspath(sys.argv[1])
-    d = os.path.dirname(os.path.abspath(__file__))
-    if os.path.isfile(os.path.join(d, 'backend', 'package.json')):
-        return d
-    sys.exit('Usage: python single_env_patch.py /path/to/SmartForest-main')
-
-ROOT = resolve_root()
-
-def write(rel, content):
-    path = os.path.join(ROOT, rel)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(content)
-    print(f'  OK  {rel}')
-
-
-# ── 1. frontend/src/config/backends.js — single VITE_API_URL ────────────────
-write('frontend/src/config/backends.js', """
-/**
- * backends.js — single source of truth for the backend URL (frontend).
- *
- * ONE env var, no priority list, no hardcoded fallback list:
- *   VITE_API_URL   — set this in frontend/.env to whatever is running:
- *                     local  -> http://localhost:5000/api
- *                     cloud  -> https://your-app.onrender.com/api
- *
- * The app doesn't care which one it is — it just uses whatever URL is
- * configured. Switching environments means changing ONE line in .env
- * and rebuilding (Vite bakes env vars in at build time).
- *
- * Usage:
- *   import { getAPI } from '../config/backends.js'
- *   const api = await getAPI()
- *   const res = await api.get('/alerts')
- */
-import axios from 'axios';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-
-let _checked = false;
-let _reachable = null;
-
-async function probe() {
-  try {
-    await axios.get(API_URL.replace(/\\/api$/, '') + '/api/health', { timeout: 6000 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Resolves to the configured API_URL. Throws NO_BACKEND if unreachable. */
-export async function resolveBackend() {
-  if (_checked && _reachable) return API_URL;
-  const ok = await probe();
-  _checked = true;
-  _reachable = ok;
-  if (!ok) {
-    console.warn('[Backend] Unreachable:', API_URL);
-    throw new Error('NO_BACKEND');
-  }
-  console.info('[Backend] Connected:', API_URL);
-  return API_URL;
-}
-
-/** Forces a fresh reachability check on next call. */
-export function resetBackend() {
-  _checked = false;
-  _reachable = null;
-}
-
-/** Returns an axios instance pointed at the configured backend. */
-export async function getAPI(token) {
-  const baseURL = await resolveBackend();
-  const headers = token ? { Authorization: `Bearer ${token}` } : {};
-  return axios.create({ baseURL, headers });
-}
-
-/** The single configured URL (for status display / debugging). */
-export const BACKEND_URL = API_URL;
-""")
-
-
-# ── 2. frontend/src/services/api.js — keep re-export shim ───────────────────
-write('frontend/src/services/api.js', """
-/**
- * api.js — re-exports from config/backends.js for backward compatibility.
- */
-export { getAPI, resolveBackend, resetBackend, BACKEND_URL } from '../config/backends.js';
-""")
-
-# ── 3. frontend/src/components/BackendStatus.jsx — single URL display ───────
-write('frontend/src/components/BackendStatus.jsx', """
-import { useEffect, useState } from 'react'
-import { resolveBackend, resetBackend, BACKEND_URL } from '../config/backends.js'
-
-export default function BackendStatus() {
-  const [status, setStatus] = useState('checking')   // 'checking' | 'online' | 'offline'
-
-  async function check() {
-    setStatus('checking')
-    try {
-      await resolveBackend()
-      setStatus('online')
-    } catch {
-      setStatus('offline')
-    }
-  }
-
-  useEffect(() => {
-    check()
-    const t = setInterval(check, 30_000)
-    return () => clearInterval(t)
-  }, [])
-
-  if (status === 'online') return null
-
-  return (
-    <div style={status === 'checking' ? styles.checking : styles.offline}>
-      <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-        <span>{status === 'checking' ? '🟡' : '🔴'}</span>
-        <div>
-          <div style={{ fontWeight:700, fontSize:13 }}>
-            Backend {status === 'checking' ? 'connecting…' : 'offline'}
-          </div>
-          {status === 'offline' && (
-            <div style={{ fontSize:11, opacity:0.85, marginTop:2 }}>
-              {BACKEND_URL}
-            </div>
-          )}
-        </div>
-        {status === 'offline' && (
-          <button onClick={() => { resetBackend(); check() }} style={styles.retryBtn}>
-            Retry
-          </button>
-        )}
-      </div>
-    </div>
-  )
-}
-
-const base = {
-  position:'fixed', top:12, right:12,
-  padding:'10px 14px', borderRadius:8,
-  color:'#fff', zIndex:9999,
-  boxShadow:'0 2px 12px rgba(0,0,0,0.25)',
-  maxWidth:340, fontFamily:'system-ui,sans-serif',
-}
-const styles = {
-  checking: { ...base, background:'#d97706' },
-  offline:  { ...base, background:'#dc2626' },
-  retryBtn: {
-    background:'rgba(255,255,255,0.25)', border:'1px solid rgba(255,255,255,0.5)',
-    color:'#fff', borderRadius:6, padding:'4px 10px',
-    fontSize:12, cursor:'pointer', marginLeft:4,
-  },
-}
-""")
-
-# ── 4. frontend/.env.example — single var ────────────────────────────────────
-write('frontend/.env.example', """
-# SmartForest Frontend — single backend URL.
-# Set this to whichever backend you want the app to use.
-# Local development:
-#   VITE_API_URL=http://localhost:5000/api
-# Production (Render-hosted backend):
-#   VITE_API_URL=https://your-app.onrender.com/api
-#
-# Changing this requires a rebuild (Vite bakes env vars in at build time).
-VITE_API_URL=http://localhost:5000/api
-""")
-
-
-# ── 5. backend/.env.example — remove BACKEND_URL_* (backend has no upstream) ─
-write('backend/.env.example', """
-PORT=5000
-NODE_ENV=development
-
-# ── Supabase ─────────────────────────────────────────────────────────────────
-SUPABASE_URL=https://[REF].supabase.co
-SUPABASE_ANON_KEY=your-anon-key
-SUPABASE_SERVICE_KEY=your-service-role-key
-
-# ── Database (Supabase POOLER — no direct host needed) ───────────────────────
-# Transaction pooler — runtime app queries (port 6543)
-DATABASE_URL=postgresql://postgres.[REF]:[PASSWORD]@aws-0-eu-west-1.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1
-# Session pooler — prisma db push / migrate (port 5432)
-DATABASE_URL_DIRECT=postgresql://postgres.[REF]:[PASSWORD]@aws-0-eu-west-1.pooler.supabase.com:5432/postgres
-
-# ── App ───────────────────────────────────────────────────────────────────────
-JWT_SECRET=change-this-to-a-long-random-secret
-FRONTEND_URL=http://localhost:5173
-
-# ── MQTT ─────────────────────────────────────────────────────────────────────
-MQTT_BROKER=mqtt://localhost:1883
-MQTT_TOPIC=forest/sensor/data
-
-# ── Alert thresholds ─────────────────────────────────────────────────────────
-SOUND_THRESHOLD_DB=80
-TEMP_THRESHOLD_C=55
-DEDUP_MINUTES=5
-
-# ── Sensor data retention (TTL) ───────────────────────────────────────────────
-# Sensor readings older than this are auto-deleted. Alerts are kept forever.
-SENSOR_TTL_MINUTES=9
-CLEANUP_INTERVAL_SECONDS=60
-""")
-
-
-# ── 6. backend/src/services/cleanupService.js — 9-minute TTL sweep ───────────
-CLEANUP_SERVICE_JS = r''''use strict';
-/**
- * cleanupService.js -- enforces a rolling time-to-live on sensor_readings.
- *
- * Sensor readings older than SENSOR_TTL_MINUTES (default 9) are deleted,
- * so the dashboard's "live" sensor history is always bounded to a short,
- * truly-live window. Alerts are NEVER pruned here -- incident history
- * persists indefinitely.
- *
- * Runs both:
- *   - On a recurring interval (CLEANUP_INTERVAL_SECONDS, default 60s)
- *   - Opportunistically after every new sensor write (see sensorModel.js)
- */
-const prisma = require('../config/prisma');
-const pool   = require('../config/db');
-
-const TTL_MINUTES = parseInt(process.env.SENSOR_TTL_MINUTES || '9', 10);
-
-async function pruneOldReadings() {
-  const cutoff = new Date(Date.now() - TTL_MINUTES * 60000);
-  try {
-    const result = await prisma.sensorReading.deleteMany({
-      where: { recordedAt: { lt: cutoff } },
-    });
-    if (result.count > 0) {
-      console.log('[cleanup] Pruned ' + result.count + ' sensor reading(s) older than ' + TTL_MINUTES + 'm');
-    }
-    return result.count;
-  } catch (e) {
-    console.warn('[cleanup] Prisma prune fallback:', e.message);
-    try {
-      const sql = "DELETE FROM sensor_readings WHERE recorded_at < NOW() - INTERVAL '" + TTL_MINUTES + " minutes'";
-      const r = await pool.query(sql);
-      if (r.rowCount > 0) {
-        console.log('[cleanup] Pruned ' + r.rowCount + ' sensor reading(s) (pg fallback)');
-      }
-      return r.rowCount;
-    } catch (e2) {
-      console.error('[cleanup] Prune failed entirely:', e2.message);
-      return 0;
-    }
-  }
-}
-
-let _interval = null;
-
-function startCleanupSchedule() {
-  const seconds = parseInt(process.env.CLEANUP_INTERVAL_SECONDS || '60', 10);
-  if (_interval) clearInterval(_interval);
-  pruneOldReadings();
-  _interval = setInterval(pruneOldReadings, seconds * 1000);
-  console.log('[cleanup] Scheduled: every ' + seconds + 's, TTL ' + TTL_MINUTES + 'm');
-  return _interval;
-}
-
-function stopCleanupSchedule() {
-  if (_interval) { clearInterval(_interval); _interval = null; }
-}
-
-module.exports = { pruneOldReadings, startCleanupSchedule, stopCleanupSchedule, TTL_MINUTES };
-'''
-write('backend/src/services/cleanupService.js', CLEANUP_SERVICE_JS)
-
-
-# ── 7. backend/src/models/sensorModel.js — opportunistic prune on write ──────
-SENSOR_MODEL_JS = r'''
-'use strict';
-const prisma = require('../config/prisma');
-const pool   = require('../config/db');
-
-const TTL_MINUTES = parseInt(process.env.SENSOR_TTL_MINUTES || '9', 10);
-
-function toSnake(s) {
-  if (!s) return null;
-  return {
-    id             : s.id,
-    device_id      : s.deviceId,
-    sensor_type    : s.sensorType,
-    zone           : s.zone,
-    latitude       : s.latitude  != null ? Number(s.latitude)  : null,
-    longitude      : s.longitude != null ? Number(s.longitude) : null,
-    sound_db       : s.soundDb       != null ? Number(s.soundDb)      : null,
-    flame_detected : s.flameDetected,
-    temperature_c  : s.temperatureC  != null ? Number(s.temperatureC) : null,
-    is_alert       : s.isAlert,
-    recorded_at    : s.recordedAt || s.recorded_at,
-  };
-}
-
-// Opportunistic prune — runs after every write so stale rows never linger
-// even if the scheduled cleanupService tick hasn't fired yet.
-// Fire-and-forget: never blocks or fails the write that triggered it.
-function pruneAsync() {
-  const cutoff = new Date(Date.now() - TTL_MINUTES * 60000);
-  prisma.sensorReading.deleteMany({ where: { recordedAt: { lt: cutoff } } })
-    .catch(() => {
-      const sql = "DELETE FROM sensor_readings WHERE recorded_at < NOW() - INTERVAL '" + TTL_MINUTES + " minutes'";
-      pool.query(sql).catch(() => { /* best-effort, ignore */ });
-    });
-}
-
-const sensorModel = {
-
-  async saveReading(data) {
-    const {
-      device_id, sensor_type = 'microphone',
-      zone, latitude, longitude,
-      sound_db, flame_detected, temperature_c, is_alert,
-    } = data;
-    let saved;
-    try {
-      const r = await prisma.sensorReading.create({
-        data: {
-          deviceId      : device_id,
-          sensorType    : sensor_type,
-          zone, latitude, longitude,
-          soundDb       : sound_db       ?? null,
-          flameDetected : flame_detected ?? false,
-          temperatureC  : temperature_c  ?? null,
-          isAlert       : is_alert       ?? false,
-        },
-      });
-      saved = toSnake(r);
-    } catch (e) {
-      console.warn('[sensorModel] Prisma.saveReading fallback:', e.message);
-      const r = await pool.query(
-        `INSERT INTO sensor_readings
-           (device_id,sensor_type,zone,latitude,longitude,
-            sound_db,flame_detected,temperature_c,is_alert)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-        [device_id, sensor_type, zone, latitude, longitude,
-         sound_db??null, flame_detected??false, temperature_c??null, is_alert??false]
-      );
-      saved = r.rows[0];
-    }
-    pruneAsync();   // fire-and-forget TTL sweep
-    return saved;
-  },
-
-  async getAll(limit = 100) {
-    try {
-      const rows = await prisma.sensorReading.findMany({
-        orderBy: { recordedAt: 'desc' },
-        take: limit,
-      });
-      return rows.map(toSnake);
-    } catch (e) {
-      console.warn('[sensorModel] Prisma.getAll fallback:', e.message);
-      const r = await pool.query(
-        'SELECT * FROM sensor_readings ORDER BY recorded_at DESC LIMIT $1', [limit]
-      );
-      return r.rows;
-    }
-  },
-
-  async getLive() {
-    try {
-      const devices = await prisma.sensorReading.findMany({
-        distinct: ['deviceId'],
-        orderBy:  { recordedAt: 'desc' },
-        select:   { deviceId: true },
-      });
-      const rows = await Promise.all(
-        devices.map(d =>
-          prisma.sensorReading.findFirst({
-            where:   { deviceId: d.deviceId },
-            orderBy: { recordedAt: 'desc' },
-          })
-        )
-      );
-      return rows.filter(Boolean).map(toSnake);
-    } catch (e) {
-      console.warn('[sensorModel] Prisma.getLive fallback:', e.message);
-      const r = await pool.query(
-        `SELECT DISTINCT ON (device_id)
-                id,device_id,sensor_type,zone,latitude,longitude,
-                sound_db,flame_detected,temperature_c,is_alert,recorded_at
-         FROM   sensor_readings
-         ORDER  BY device_id, recorded_at DESC`
-      );
-      return r.rows;
-    }
-  },
-
-  async getByDevice(device_id, limit = 50) {
-    try {
-      const rows = await prisma.sensorReading.findMany({
-        where:   { deviceId: device_id },
-        orderBy: { recordedAt: 'desc' },
-        take: limit,
-      });
-      return rows.map(toSnake);
-    } catch (e) {
-      console.warn('[sensorModel] Prisma.getByDevice fallback:', e.message);
-      const r = await pool.query(
-        'SELECT * FROM sensor_readings WHERE device_id=$1 ORDER BY recorded_at DESC LIMIT $2',
-        [device_id, limit]
-      );
-      return r.rows;
-    }
-  },
-
-  async getBySensorType(sensor_type, limit = 100) {
-    try {
-      const rows = await prisma.sensorReading.findMany({
-        where:   { sensorType: sensor_type },
-        orderBy: { recordedAt: 'desc' },
-        take: limit,
-      });
-      return rows.map(toSnake);
-    } catch (e) {
-      console.warn('[sensorModel] Prisma.getBySensorType fallback:', e.message);
-      const r = await pool.query(
-        'SELECT * FROM sensor_readings WHERE sensor_type=$1 ORDER BY recorded_at DESC LIMIT $2',
-        [sensor_type, limit]
-      );
-      return r.rows;
-    }
-  },
-};
-
-module.exports = sensorModel;
-'''
-write('backend/src/models/sensorModel.js', SENSOR_MODEL_JS)
-
-
-# ── 8. backend/src/index.js — start cleanup schedule on boot ─────────────────
-INDEX_JS = r'''const express      = require('express');
-const cors         = require('cors');
-const dotenv       = require('dotenv');
-const { connectMQTT } = require('./services/mqttService');
-const { startCleanupSchedule } = require('./services/cleanupService');
-const errorHandler = require('./middleware/errorHandler');
-
-dotenv.config();
-
-const app  = express();
-const PORT = process.env.PORT || 5000;
-
-app.use(cors());
-app.use(express.json());
-
-// Routes
-app.use('/api/alerts',  require('./routes/alerts'));
-app.use('/api/sensors', require('./routes/sensors'));
-app.use('/api/auth',    require('./routes/auth'));
-app.use('/api/devices', require('./routes/devices'));
-app.use('/api/admin',   require('./routes/admin'));
-
-// Health check -- reports which Supabase project this deployment uses,
-// plus the active sensor-data retention window.
-app.get('/api/health', (_req, res) => {
-  let supabaseRef = 'NOT_CONFIGURED';
-  try {
-    const url = process.env.SUPABASE_URL || '';
-    const match = url.match(/https:\/\/([a-z0-9]+)\.supabase\.co/i);
-    supabaseRef = match ? match[1] : (url ? 'UNRECOGNISED_URL_FORMAT' : 'NOT_SET');
-  } catch (_) { /* ignore */ }
-
-  res.json({
-    status          : 'ok',
-    timestamp       : new Date().toISOString(),
-    supabaseProject : supabaseRef,
-    nodeEnv         : process.env.NODE_ENV || 'development',
-    hasServiceKey   : !!process.env.SUPABASE_SERVICE_KEY,
-    hasDbUrl        : !!process.env.DATABASE_URL,
-    sensorTtlMinutes: parseInt(process.env.SENSOR_TTL_MINUTES || '9', 10),
-  });
-});
-
-app.use(errorHandler);
-
-let server;
-if (process.env.NODE_ENV !== 'test') {
-  connectMQTT();
-  startCleanupSchedule();   // begin the 9-minute sensor-data TTL sweep
-  server = app.listen(PORT, () => {
-    console.log(`SmartForest backend running on http://localhost:${PORT}`);
-    console.log(`Supabase project: ${(process.env.SUPABASE_URL || 'NOT SET')}`);
-  });
-}
-
-module.exports = { app, server };
-'''
-write('backend/src/index.js', INDEX_JS)
-
-
-# ── 9. backend/jest.setup.js — add cleanupService mock (avoid real timers) ───
-jest_path = os.path.join(ROOT, 'backend', 'jest.setup.js')
-if os.path.isfile(jest_path):
-    src = open(jest_path, encoding='utf-8').read()
-    addition = """
-// -- cleanupService -- mocked so tests never start real intervals
-jest.mock('./src/services/cleanupService', () => ({
-  pruneOldReadings    : jest.fn().mockResolvedValue(0),
-  startCleanupSchedule: jest.fn(),
-  stopCleanupSchedule : jest.fn(),
-  TTL_MINUTES: 9,
-}));
-"""
-    if 'cleanupService' not in src:
-        src = src.rstrip() + '\n' + addition
-        with open(jest_path, 'w', encoding='utf-8') as f:
-            f.write(src)
-        print('  OK  backend/jest.setup.js  (added cleanupService mock)')
-    else:
-        print('  SKIP backend/jest.setup.js  (cleanupService mock already present)')
-else:
-    print('  SKIP backend/jest.setup.js  (file not found)')
-
-
-# ── 10. simulator/mqtt_simulator.py — single BACKEND_URL, 3-min interval ─────
-SIMULATOR_PY = r'''#!/usr/bin/env python3
-# SmartForest IoT Hardware Simulator
-# ====================================
-# Simulates real hardware sensor units. Sends a NEW reading every 3 minutes
-# (180s) by default, with realistic parameter drift between readings so
-# values change gradually rather than jumping randomly each time.
-#
-# Backend URL -- SINGLE env var, no priority list:
-#   BACKEND_URL=http://localhost:5000        (local)
-#   BACKEND_URL=https://your-app.onrender.com (cloud)
-# Whichever one is set is what the simulator uses. No code change needed
-# to switch between local and cloud -- just change .env and restart.
-#
-# Hardware ID convention:
-#   Real hardware : smf-m01a (microphone), smf-f01a (flame)
-#   Simulator     : smt-m01a (microphone), smt-f01a (flame)
-#
-# Usage:
-#   pip install -r requirements.txt
-#   python mqtt_simulator.py             # run with defaults (180s interval)
-#   python mqtt_simulator.py --stop      # graceful stop
-#   python mqtt_simulator.py --interval 30 --spike 0.3   # faster for testing
-#   USE_REAL_IDS=true python mqtt_simulator.py
-#
-# Env vars (set in simulator/.env):
-#   BACKEND_URL         single backend URL -- local or cloud, doesn't matter
-#   MQTT_BROKER_HOST    default: localhost (optional -- HTTP works standalone)
-#   MQTT_BROKER_PORT    default: 1883
-#   MQTT_TOPIC          default: forest/sensor/data
-#   SEND_INTERVAL       default: 180 (seconds -- 3 minutes, matches real HW)
-#   SPIKE_CHANCE        default: 0.20
-#   USE_REAL_IDS        default: false
-
-import json, random, time, os, sys, argparse, signal, urllib.request, urllib.error
-from datetime import datetime, timezone
+import sys, os, shutil, textwrap
 from pathlib import Path
 
-# -- Optional MQTT (HTTP-only mode works fine without a broker) --------------
-try:
-    import paho.mqtt.client as mqtt
-    HAS_MQTT = True
-except ImportError:
-    HAS_MQTT = False
+ROOT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).parent
+FRONTEND = ROOT / "frontend"
+SRC      = FRONTEND / "src"
 
-# -- Load .env if python-dotenv is available ----------------------------------
-try:
-    from dotenv import load_dotenv
-    env_file = Path(__file__).parent / '.env'
-    if env_file.exists():
-        load_dotenv(env_file)
-        print(f'[SIM] Loaded env: {env_file}')
-except ImportError:
-    pass
+print(f"[SmartForest Patch] Root: {ROOT}")
+assert FRONTEND.exists(), f"frontend/ not found under {ROOT}"
 
-# -- Config: ONE backend URL, no fallback list --------------------------------
-BACKEND_URL  = os.getenv('BACKEND_URL', 'http://localhost:5000').rstrip('/')
-BROKER       = os.getenv('MQTT_BROKER_HOST', 'localhost')
-PORT         = int(os.getenv('MQTT_BROKER_PORT', 1883))
-TOPIC        = os.getenv('MQTT_TOPIC', 'forest/sensor/data')
-INTERVAL     = float(os.getenv('SEND_INTERVAL', 180))   # 3 minutes, matches real HW
-SPIKE_CHANCE = float(os.getenv('SPIKE_CHANCE', 0.20))
-USE_REAL_IDS = os.getenv('USE_REAL_IDS', 'false').lower() == 'true'
-SENTINEL     = Path(__file__).parent / 'STOP_SIMULATOR'
 
-PREFIX    = 'smf' if USE_REAL_IDS else 'smt'
-MIC_IDS   = [f'{PREFIX}-m{str(i).zfill(2)}a' for i in range(1, 4)]
-FLAME_IDS = [f'{PREFIX}-f{str(i).zfill(2)}a' for i in range(1, 3)]
+# ─────────────────────────────────────────────────────────────────────────────
+# helpers
+# ─────────────────────────────────────────────────────────────────────────────
+def write(path: Path, content: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    print(f"  [write] {path.relative_to(ROOT)}")
 
-ZONES = [
-    {'zone': 'Kibiti-North', 'lat': -7.72, 'lng': 38.95},
-    {'zone': 'Kibiti-South', 'lat': -7.85, 'lng': 38.88},
-    {'zone': 'Kibiti-East',  'lat': -7.78, 'lng': 39.05},
-    {'zone': 'Kibiti-West',  'lat': -7.80, 'lng': 38.82},
-]
+def backup(path: Path):
+    bak = path.with_suffix(path.suffix + ".bak")
+    if path.exists() and not bak.exists():
+        shutil.copy2(path, bak)
 
-# -- Drifting state per device, so each new reading shifts gradually ---------
-# instead of jumping randomly -- mimics real sensor behaviour over time.
-_state = {}
+def patch(path: Path, content: str):
+    backup(path)
+    write(path, content)
 
-def _drift(device_id, base, lo, hi, max_step):
-    prev = _state.get(device_id, base)
-    step = random.uniform(-max_step, max_step)
-    val  = max(lo, min(hi, prev + step))
-    _state[device_id] = val
-    return round(val, 2)
 
-# -- Backend health probe ------------------------------------------------------
-def probe_backend(timeout=5):
-    try:
-        req = urllib.request.urlopen(BACKEND_URL + '/api/health', timeout=timeout)
-        return req.status == 200
-    except Exception as e:
-        print(f'[SIM] Backend probe failed: {e}')
-        return False
+# ─────────────────────────────────────────────────────────────────────────────
+# 1.  backend URL — single env-var, no hardcoded fallback
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n[1] Fixing backend URL config …")
 
-# -- Payload generators (with gradual drift) ----------------------------------
-def make_mic(spike):
-    z = random.choice(ZONES)
-    device = random.choice(MIC_IDS)
-    if spike:
-        db = round(random.uniform(82, 98), 2)
-    else:
-        db = _drift(device, 35, 18, 65, 6)
-    return {
-        'device_id'    : device,
-        'sensor_type'  : 'microphone',
-        'hardware_type': 'REAL' if USE_REAL_IDS else 'SIMULATOR',
-        'timestamp'    : datetime.now(timezone.utc).isoformat(),
-        'zone'         : z['zone'],
-        'latitude'     : round(z['lat'] + random.uniform(-0.01, 0.01), 6),
-        'longitude'    : round(z['lng'] + random.uniform(-0.01, 0.01), 6),
-        'sound_db'     : db,
+patch(FRONTEND / ".env.example", textwrap.dedent("""\
+    # SmartForest Frontend — single backend URL
+    # Set this to whichever backend you want the app to use.
+    #
+    # Local development:
+    #   VITE_API_URL=http://localhost:5000/api
+    #
+    # Production (Render-hosted backend):
+    #   VITE_API_URL=https://your-app.onrender.com/api
+    #
+    # ⚠ On Vercel you MUST set this in:
+    #   Vercel → Project Settings → Environment Variables → VITE_API_URL
+    #   Then trigger a redeploy so Vite bakes the value into the bundle.
+    #
+    VITE_API_URL=http://localhost:5000/api
+"""))
+
+# Update the actual .env only if VITE_API_URL is still pointing at localhost
+# (don't overwrite a user's custom Render URL)
+env_file = FRONTEND / ".env"
+if env_file.exists():
+    env_text = env_file.read_text()
+else:
+    env_text = ""
+
+if "VITE_API_URL" not in env_text:
+    with open(env_file, "a") as f:
+        f.write("\nVITE_API_URL=http://localhost:5000/api\n")
+    print("  [env] Added VITE_API_URL to .env")
+
+# Fix backends.js — remove the hardcoded localhost fallback so Vercel build
+# with no env var gives a clear error instead of silently using localhost.
+patch(SRC / "config" / "backends.js", textwrap.dedent("""\
+    /**
+     * backends.js — single source of truth for the backend URL (frontend).
+     *
+     * ONE env var controls everything:
+     *   VITE_API_URL   — set in frontend/.env  (local)
+     *                    OR in Vercel → Project Settings → Environment Variables
+     *
+     * Vite bakes the value in at build time, so a redeploy is needed after
+     * changing the variable on Vercel.
+     *
+     * Usage:
+     *   import { getAPI } from '../config/backends.js'
+     *   const api = await getAPI()
+     *   const res = await api.get('/alerts')
+     */
+    import axios from 'axios';
+
+    // MUST be set via env — no hardcoded fallback so misconfigurations are obvious.
+    const API_URL = import.meta.env.VITE_API_URL;
+
+    if (!API_URL) {
+      console.error(
+        '[SmartForest] VITE_API_URL is not set.\\n' +
+        'Local: add VITE_API_URL=http://localhost:5000/api to frontend/.env\\n' +
+        'Vercel: add VITE_API_URL in Project Settings → Environment Variables, then redeploy.'
+      );
     }
 
-def make_flame(spike):
-    z = random.choice(ZONES)
-    device = random.choice(FLAME_IDS)
-    if spike:
-        temp = round(random.uniform(58, 95), 2)
-    else:
-        temp = _drift(device, 27, 20, 42, 3)
-    return {
-        'device_id'      : device,
-        'sensor_type'    : 'flame',
-        'hardware_type'  : 'REAL' if USE_REAL_IDS else 'SIMULATOR',
-        'timestamp'      : datetime.now(timezone.utc).isoformat(),
-        'zone'           : z['zone'],
-        'latitude'       : round(z['lat'] + random.uniform(-0.01, 0.01), 6),
-        'longitude'      : round(z['lng'] + random.uniform(-0.01, 0.01), 6),
-        'flame_detected' : bool(spike),
-        'temperature_c'  : temp,
+    let _checked  = false;
+    let _reachable = null;
+
+    async function probe() {
+      try {
+        await axios.get(API_URL.replace(/\\/api$/, '') + '/api/health', { timeout: 6000 });
+        return true;
+      } catch {
+        return false;
+      }
     }
 
-# -- HTTP POST to backend ------------------------------------------------------
-def post_reading(payload):
-    try:
-        data = json.dumps(payload).encode('utf-8')
-        req  = urllib.request.Request(
-            BACKEND_URL + '/api/sensors',
-            data=data,
-            headers={'Content-Type': 'application/json'},
-            method='POST'
+    /** Resolves to the configured API_URL. Throws NO_BACKEND if unreachable. */
+    export async function resolveBackend() {
+      if (!API_URL) throw new Error('NO_BACKEND');
+      if (_checked && _reachable) return API_URL;
+      const ok = await probe();
+      _checked  = true;
+      _reachable = ok;
+      if (!ok) {
+        console.warn('[Backend] Unreachable:', API_URL);
+        throw new Error('NO_BACKEND');
+      }
+      console.info('[Backend] Connected:', API_URL);
+      return API_URL;
+    }
+
+    /** Forces a fresh reachability check on next call. */
+    export function resetBackend() {
+      _checked  = false;
+      _reachable = null;
+    }
+
+    /** Returns an axios instance pointed at the configured backend. */
+    export async function getAPI(token) {
+      const baseURL = await resolveBackend();
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      return axios.create({ baseURL, headers });
+    }
+
+    /** The single configured URL (for status display / debugging). */
+    export const BACKEND_URL = API_URL || '(VITE_API_URL not set)';
+"""))
+
+# api.js re-export — keep as-is (already correct)
+patch(SRC / "services" / "api.js", textwrap.dedent("""\
+    /**
+     * api.js — re-exports from config/backends.js for backward compatibility.
+     */
+    export { getAPI, resolveBackend, resetBackend, BACKEND_URL } from '../config/backends.js';
+"""))
+
+# BackendStatus.jsx — replace emoji dots with SVG circles
+patch(SRC / "components" / "BackendStatus.jsx", textwrap.dedent("""\
+    import { useEffect, useState } from 'react'
+    import { resolveBackend, resetBackend, BACKEND_URL } from '../config/backends.js'
+
+    function DotIcon({ color }) {
+      return (
+        <svg width="12" height="12" viewBox="0 0 12 12" style={{ flexShrink:0 }}>
+          <circle cx="6" cy="6" r="5" fill={color} />
+        </svg>
+      )
+    }
+
+    function RefreshIcon() {
+      return (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="23 4 23 10 17 10"/>
+          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+        </svg>
+      )
+    }
+
+    export default function BackendStatus() {
+      const [status, setStatus] = useState('checking')
+
+      async function check() {
+        setStatus('checking')
+        try {
+          await resolveBackend()
+          setStatus('online')
+        } catch {
+          setStatus('offline')
+        }
+      }
+
+      useEffect(() => {
+        check()
+        const t = setInterval(check, 30_000)
+        return () => clearInterval(t)
+      }, [])
+
+      if (status === 'online') return null
+
+      return (
+        <div style={status === 'checking' ? styles.checking : styles.offline}>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <DotIcon color={status === 'checking' ? '#fbbf24' : '#fff'} />
+            <div>
+              <div style={{ fontWeight:700, fontSize:13 }}>
+                Backend {status === 'checking' ? 'connecting…' : 'offline'}
+              </div>
+              {status === 'offline' && (
+                <div style={{ fontSize:11, opacity:0.85, marginTop:2 }}>
+                  {BACKEND_URL}
+                </div>
+              )}
+            </div>
+            {status === 'offline' && (
+              <button onClick={() => { resetBackend(); check() }} style={styles.retryBtn}>
+                <RefreshIcon /> Retry
+              </button>
+            )}
+          </div>
+        </div>
+      )
+    }
+
+    const base = {
+      position:'fixed', top:12, right:12,
+      padding:'10px 14px', borderRadius:8,
+      color:'#fff', zIndex:9999,
+      boxShadow:'0 2px 12px rgba(0,0,0,0.25)',
+      maxWidth:340, fontFamily:'system-ui,sans-serif',
+    }
+    const styles = {
+      checking: { ...base, background:'#d97706' },
+      offline:  { ...base, background:'#dc2626' },
+      retryBtn: {
+        display:'flex', alignItems:'center', gap:4,
+        background:'rgba(255,255,255,0.25)', border:'1px solid rgba(255,255,255,0.5)',
+        color:'#fff', borderRadius:6, padding:'4px 10px',
+        fontSize:12, cursor:'pointer', marginLeft:4,
+      },
+    }
+"""))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2.  Login page — centre header, bump font sizes, remove emoji eye icon
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n[2] Patching Login page …")
+
+patch(SRC / "pages" / "Login.jsx", textwrap.dedent(r"""
+    import { useState, useEffect } from 'react'
+    import { getAPI } from '../config/backends.js'
+    import SignupModal from '../components/SignupModal.jsx'
+
+    /* Forest carousel — images in public/assets/forest/ */
+    const FOREST_IMGS = [
+      '/assets/forest/forest1.png',
+      '/assets/forest/forest2.png',
+      '/assets/forest/forest3.png',
+      '/assets/forest/forest4.png',
+      '/assets/forest/forest5.png',
+      '/assets/forest/forest6.png',
+    ]
+
+    function useWindowWidth() {
+      const [w, setW] = useState(window.innerWidth)
+      useEffect(() => {
+        const fn = () => setW(window.innerWidth)
+        window.addEventListener('resize', fn)
+        return () => window.removeEventListener('resize', fn)
+      }, [])
+      return w
+    }
+
+    export default function Login({ onLogin }) {
+      const [email,    setEmail]    = useState('')
+      const [password, setPassword] = useState('')
+      const [error,    setError]    = useState('')
+      const [loading,  setLoading]  = useState(false)
+      const [imgIdx,   setImgIdx]   = useState(0)
+      const [showPwd,  setShowPwd]  = useState(false)
+      const [signup,   setSignup]   = useState(false)
+      const w = useWindowWidth()
+
+      const isMobile = w < 640
+      const isTablet = w >= 640 && w < 1024
+
+      useEffect(() => {
+        const t = setInterval(() => setImgIdx(i => (i + 1) % FOREST_IMGS.length), 5000)
+        return () => clearInterval(t)
+      }, [])
+
+      async function handleSubmit(e) {
+        e.preventDefault()
+        setError('')
+        setLoading(true)
+        try {
+          const api = await getAPI()
+          const res = await api.post('/auth/login', { email, password })
+          onLogin(res.data)
+        } catch (err) {
+          const reason    = err?.response?.data?.reason
+          const serverMsg = err?.response?.data?.error
+          if (err?.message === 'NO_BACKEND') {
+            setError('Cannot reach the backend server. Check your connection or try again shortly.')
+          } else if (reason === 'invalid_credentials') {
+            setError(serverMsg || 'Incorrect email or password.')
+          } else if (reason === 'supabase_unreachable') {
+            setError('Authentication service is temporarily unavailable. Please try again.')
+          } else if (reason === 'profile_sync_failed') {
+            setError('Signed in, but could not load your profile. Please try again.')
+          } else if (serverMsg) {
+            setError(serverMsg)
+          } else {
+            setError('Could not reach the server. Please check your connection and try again.')
+          }
+        } finally {
+          setLoading(false)
+        }
+      }
+
+      const cardStyle = {
+        display: 'flex',
+        flexDirection: isMobile ? 'column' : 'row',
+        width: '100%',
+        maxWidth: isMobile ? '100%' : isTablet ? 680 : 860,
+        background: '#fff',
+        borderRadius: isMobile ? 12 : 16,
+        boxShadow: '0 8px 40px rgba(0,80,0,0.13)',
+        overflow: 'hidden',
+        marginTop: isMobile ? 12 : 24,
+        minHeight: isMobile ? 'auto' : 500,
+      }
+
+      const forestSideStyle = {
+        flex: isMobile ? '0 0 200px' : '0 0 44%',
+        position: 'relative',
+        overflow: 'hidden',
+        background: '#1a5c38',
+        minHeight: isMobile ? 180 : 'auto',
+        order: isMobile ? -1 : 0,
+      }
+
+      const formPad = isMobile ? '28px 22px' : isTablet ? '36px 36px' : '44px 48px'
+
+      return (
+        <>
+          <style>{`
+            @keyframes sfFadeIn  { from{opacity:0;transform:scale(1.04)} to{opacity:1;transform:scale(1)} }
+            @keyframes sfSlideUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+            .sf-forest-img { animation: sfFadeIn 0.8s ease; }
+            .sf-form-wrap  { animation: sfSlideUp 0.5s ease; }
+            .sf-input:focus { border-color:#2e7d32 !important; box-shadow:0 0 0 3px rgba(46,125,50,0.15) !important; }
+            .sf-login-btn:hover:not(:disabled) { background:#1b5e20 !important; transform:translateY(-1px); box-shadow:0 4px 12px rgba(46,125,50,0.4); }
+            .sf-login-btn { transition: all 0.2s ease !important; }
+            * { box-sizing: border-box; }
+          `}</style>
+
+          <div style={{
+            minHeight: '100vh',
+            background: 'linear-gradient(160deg,#e8f5e9 0%,#c8e6c9 40%,#a5d6a7 100%)',
+            display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'flex-start',
+            padding: isMobile ? '0 10px 20px' : '0 16px 24px',
+            fontFamily: "'Segoe UI', system-ui, sans-serif",
+          }}>
+
+            {/* ── Header — centred on all screens ── */}
+            <div style={{
+              width:'100%',
+              maxWidth: isMobile ? '100%' : 860,
+              paddingTop: isMobile ? 20 : 28,
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+            }}>
+              <div style={{ display:'flex', alignItems:'center', gap: isMobile ? 12 : 18, marginBottom:10 }}>
+
+                {/* Circular logo */}
+                <div style={{
+                  width: isMobile ? 58 : 76, height: isMobile ? 58 : 76,
+                  borderRadius: '50%',
+                  border: '3px solid #2e7d32',
+                  boxShadow: '0 0 0 2px #81c784, 0 2px 12px rgba(46,125,50,0.3)',
+                  overflow: 'hidden',
+                  flexShrink: 0,
+                  background: '#f1f8f2',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <img
+                    src="/assets/logo_circle.png"
+                    alt="SmartForest"
+                    style={{ width:'100%', height:'100%', objectFit:'cover', objectPosition:'center top', display:'block' }}
+                    onError={e => { e.target.src = '/assets/logo.png'; e.target.style.objectFit = 'cover' }}
+                  />
+                </div>
+
+                <ProfessionalTitle small={isMobile} />
+              </div>
+
+              {/* Divider line — full width of the content column */}
+              <div style={{
+                width:'100%',
+                height:3,
+                background:'linear-gradient(90deg,#1b5e20,#4caf50,#81c784)',
+                borderRadius:4,
+              }} />
+            </div>
+
+            {/* ── Main card ── */}
+            <div style={cardStyle}>
+
+              {/* Left: forest carousel */}
+              <div style={forestSideStyle}>
+                <img
+                  key={imgIdx}
+                  src={FOREST_IMGS[imgIdx]}
+                  alt="Forest"
+                  className="sf-forest-img"
+                  style={{ width:'100%', height:'100%', objectFit:'cover', display:'block', minHeight: isMobile ? 180 : 320 }}
+                  onError={e => {
+                    e.target.src = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='400' height='500'><defs><linearGradient id='g' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='%23a8e6cf'/><stop offset='1' stop-color='%231a5c38'/></linearGradient></defs><rect width='400' height='500' fill='url(%23g)'/><text x='200' y='250' text-anchor='middle' font-size='14' fill='white' font-family='sans-serif'>SmartForest</text></svg>`
+                  }}
+                />
+                {/* Dot indicators */}
+                <div style={{ position:'absolute', bottom:12, left:'50%', transform:'translateX(-50%)', display:'flex', gap:6 }}>
+                  {FOREST_IMGS.map((_, i) => (
+                    <button key={i} onClick={() => setImgIdx(i)} aria-label={`Image ${i+1}`}
+                      style={{ width:8, height:8, borderRadius:'50%', border:'none', cursor:'pointer', padding:0,
+                        background: i === imgIdx ? '#fff' : 'rgba(255,255,255,0.45)',
+                        transition:'background 0.2s' }} />
+                  ))}
+                </div>
+              </div>
+
+              {/* Right: form */}
+              <div className="sf-form-wrap" style={{
+                flex: 1, padding: formPad,
+                display:'flex', flexDirection:'column', justifyContent:'center',
+              }}>
+                {/* Sign-in heading */}
+                <div style={{ fontSize: isMobile ? 20 : 24, fontWeight:800, color:'#1b5e20',
+                  textAlign:'center', letterSpacing:3, display:'flex', alignItems:'center',
+                  justifyContent:'center', gap:8, marginBottom:6 }}>
+                  <LeafIcon /> SIGN IN <LeafIcon flip />
+                </div>
+                <div style={{ height:2, background:'linear-gradient(90deg,transparent,#4caf50,transparent)', marginBottom: isMobile ? 18 : 26 }} />
+
+                {error && (
+                  <div role="alert" style={{ background:'#ffebee', color:'#c62828', borderRadius:8,
+                    padding:'10px 14px', fontSize:14, marginBottom:14, border:'1px solid #ffcdd2' }}>
+                    {error}
+                  </div>
+                )}
+
+                <form onSubmit={handleSubmit} noValidate>
+                  <label style={labelStyle} htmlFor="sf-email">Email</label>
+                  <div style={{ position:'relative', display:'flex', alignItems:'center' }}>
+                    <MailIcon />
+                    <input id="sf-email" data-testid="login-email" className="sf-input"
+                      style={inputStyle} type="email" placeholder="Enter your email"
+                      value={email} onChange={e => setEmail(e.target.value)}
+                      required autoComplete="email" />
+                  </div>
+
+                  <label style={{ ...labelStyle, marginTop:16 }} htmlFor="sf-password">Password</label>
+                  <div style={{ position:'relative', display:'flex', alignItems:'center' }}>
+                    <LockIcon />
+                    <input id="sf-password" data-testid="login-password" className="sf-input"
+                      style={inputStyle} type={showPwd ? 'text' : 'password'}
+                      placeholder="Enter your password"
+                      value={password} onChange={e => setPassword(e.target.value)}
+                      required autoComplete="current-password" />
+                    <button type="button" onClick={() => setShowPwd(v => !v)}
+                      style={{ position:'absolute', right:10, background:'none', border:'none',
+                        cursor:'pointer', padding:4, color:'#4a7c59', display:'flex', alignItems:'center' }}
+                      aria-label={showPwd ? 'Hide password' : 'Show password'}>
+                      {showPwd ? <EyeOffIcon /> : <EyeIcon />}
+                    </button>
+                  </div>
+
+                  <button data-testid="login-submit" type="submit" disabled={loading}
+                    className="sf-login-btn"
+                    style={{ width:'100%', marginTop: isMobile ? 20 : 26, padding: isMobile ? '13px' : '15px',
+                      fontSize:16, fontWeight:800, letterSpacing:2,
+                      background:'#2e7d32', color:'#fff', border:'none', borderRadius:8,
+                      cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.7 : 1 }}>
+                    {loading ? 'Signing in…' : 'LOGIN'}
+                  </button>
+                </form>
+
+                <p style={{ textAlign:'center', marginTop:18, fontSize:15, color:'#555' }}>
+                  Don&apos;t have an account?{' '}
+                  <button style={{ background:'none', border:'none', cursor:'pointer',
+                    color:'#2e7d32', fontWeight:700, fontSize:15, textDecoration:'underline' }}
+                    onClick={() => setSignup(true)} data-testid="open-signup">
+                    Sign up
+                  </button>
+                </p>
+
+                {/* Demo credentials */}
+                <div style={{ marginTop:16, padding:'10px 14px', background:'#f1f8f2',
+                  borderRadius:8, border:'1px solid #c8e6c9', fontSize:12, color:'#555' }}>
+                  <strong style={{color:'#2e7d32'}}>Demo credentials:</strong><br/>
+                  Admin: admin@smf.tz / smf@1234<br/>
+                  Ranger: ranger@smf.tz / smf@1234
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div style={{ marginTop:18, fontSize:13, color:'#2e7d32', display:'flex', alignItems:'center', gap:4 }}>
+              <LeafIcon small /> © 2026 SmartForest <LeafIcon small flip />
+            </div>
+          </div>
+
+          {signup && (
+            <SignupModal
+              onClose={() => setSignup(false)}
+              onSuccess={() => { setSignup(false); setError('Account created! Please sign in.') }}
+            />
+          )}
+        </>
+      )
+    }
+
+    /* ── Professional gradient title ── */
+    function ProfessionalTitle({ small }) {
+      const W  = small ? 230 : 350
+      const H  = small ? 46  : 64
+      const FS = small ? 38  : 56
+      const Y  = small ? 38  : 54
+      return (
+        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ overflow:'visible', flexShrink:0 }}>
+          <defs>
+            <linearGradient id="smfGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%"   stopColor="#0a0a0a" />
+              <stop offset="30%"  stopColor="#1b5e20" />
+              <stop offset="60%"  stopColor="#2e7d32" />
+              <stop offset="85%"  stopColor="#43a047" />
+              <stop offset="100%" stopColor="#1b5e20" />
+            </linearGradient>
+            <filter id="smfGlow" x="-5%" y="-15%" width="110%" height="140%">
+              <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="#1b5e20" floodOpacity="0.35"/>
+            </filter>
+            <linearGradient id="smfShine" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%"  stopColor="rgba(255,255,255,0.18)" />
+              <stop offset="50%" stopColor="rgba(255,255,255,0)" />
+            </linearGradient>
+          </defs>
+          <text x="2" y={Y+2} fontFamily="'Georgia','Times New Roman',serif"
+            fontWeight="900" fontSize={FS} fill="rgba(0,0,0,0.18)"
+            style={{fontStyle:'italic', letterSpacing:1}}>SmartForest</text>
+          <text x="0" y={Y} fontFamily="'Georgia','Times New Roman',serif"
+            fontWeight="900" fontSize={FS}
+            fill="url(#smfGrad)" filter="url(#smfGlow)"
+            style={{fontStyle:'italic', letterSpacing:1}}>SmartForest</text>
+          <text x="0" y={Y} fontFamily="'Georgia','Times New Roman',serif"
+            fontWeight="900" fontSize={FS}
+            fill="url(#smfShine)"
+            style={{fontStyle:'italic', letterSpacing:1}}>SmartForest</text>
+          <path d={`M0 ${H-4} Q${W/2} ${H+2} ${W} ${H-4}`}
+            stroke="url(#smfGrad)" strokeWidth="2.5" fill="none" strokeLinecap="round" opacity="0.7"/>
+        </svg>
+      )
+    }
+
+    /* ── Tiny inline SVG icons (lucide-style) ── */
+    function LeafIcon({ flip, small }) {
+      const sz = small ? 14 : 18
+      return (
+        <svg width={sz} height={sz} viewBox="0 0 24 24" fill="#2e7d32"
+          style={{ transform: flip ? 'scaleX(-1)' : 'none', display:'inline-block', verticalAlign:'middle' }}>
+          <path d="M17 8C8 10 5.9 16.17 3.82 21.34L5.71 22l1-2.3A4.49 4.49 0 008 20C19 20 22 3 22 3c-1 2-8 4-13 9 1.5-2 7-5 8-4z"/>
+        </svg>
+      )
+    }
+    function MailIcon() {
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4a7c59" strokeWidth="2"
+          style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', pointerEvents:'none' }}>
+          <rect x="2" y="4" width="20" height="16" rx="2"/>
+          <path d="m22 7-8.97 5.7a1.94 1.94 0 01-2.06 0L2 7"/>
+        </svg>
+      )
+    }
+    function LockIcon() {
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4a7c59" strokeWidth="2"
+          style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', pointerEvents:'none' }}>
+          <rect x="3" y="11" width="18" height="11" rx="2"/>
+          <path d="M7 11V7a5 5 0 0110 0v4"/>
+        </svg>
+      )
+    }
+    function EyeIcon() {
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+          <circle cx="12" cy="12" r="3"/>
+        </svg>
+      )
+    }
+    function EyeOffIcon() {
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/>
+          <path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/>
+          <line x1="1" y1="1" x2="23" y2="23"/>
+        </svg>
+      )
+    }
+
+    const labelStyle = {
+      display:'block', fontSize:14, fontWeight:600,
+      color:'#2e4a2e', marginBottom:6, marginTop:14,
+    }
+    const inputStyle = {
+      width:'100%', padding:'12px 40px 12px 42px',
+      fontSize:15, border:'1.5px solid #c8e6c9',
+      borderRadius:8, outline:'none',
+      background:'#f9fef9', color:'#1b5e20',
+      transition:'border-color .2s, box-shadow .2s',
+    }
+"""))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3.  Navbar — remove emoji, rename role tag, remove "alerts" word from badge
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n[3] Patching Navbar …")
+
+patch(SRC / "components" / "Navbar.jsx", textwrap.dedent("""\
+    /* Navbar — professional SVG icons, no emoji */
+    export default function Navbar({ session, alertCount, role }) {
+      const user = session?.user || {}
+      return (
+        <nav style={nav}>
+          <div style={left}>
+            {/* Circular logo */}
+            <div style={logoRing}>
+              <img src="/assets/logo_circle.png" alt="SmartForest"
+                style={{ width:'100%', height:'100%', objectFit:'cover', objectPosition:'center top', display:'block' }}
+                onError={e => { e.target.src = '/assets/logo.png'; e.target.style.objectFit='cover' }} />
+            </div>
+            <NavTitle />
+            <span style={roleTag}>
+              {role === 'admin' ? <ShieldIcon /> : <UserIcon />}
+              {' '}{role === 'admin' ? 'System Admin' : 'System'}
+            </span>
+          </div>
+          <div style={right}>
+            {alertCount > 0 && (
+              <span style={alertBadge}>
+                <BellIcon /> {alertCount}
+              </span>
+            )}
+            <span style={userLabel}>{user.name || user.email || 'User'}</span>
+          </div>
+        </nav>
+      )
+    }
+
+    function NavTitle() {
+      return (
+        <svg width="160" height="32" viewBox="0 0 160 32" style={{ overflow:'visible' }}>
+          <defs>
+            <linearGradient id="nvGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%"   stopColor="#ffffff" />
+              <stop offset="40%"  stopColor="#a5d6a7" />
+              <stop offset="100%" stopColor="#69f0ae" />
+            </linearGradient>
+            <filter id="nvGlow">
+              <feDropShadow dx="0" dy="1" stdDeviation="1.5" floodColor="#000" floodOpacity="0.3"/>
+            </filter>
+          </defs>
+          <text x="0" y="26" fontFamily="Georgia,serif" fontWeight="900"
+            fontSize="26" fill="url(#nvGrad)" filter="url(#nvGlow)"
+            style={{ fontStyle:'italic', letterSpacing:0.5 }}>
+            SmartForest
+          </text>
+        </svg>
+      )
+    }
+
+    /* Inline SVG icons */
+    function ShieldIcon() {
+      return (
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+          style={{ display:'inline', verticalAlign:'middle', marginRight:3 }}>
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+      )
+    }
+    function UserIcon() {
+      return (
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+          style={{ display:'inline', verticalAlign:'middle', marginRight:3 }}>
+          <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
+          <circle cx="12" cy="7" r="4"/>
+        </svg>
+      )
+    }
+    function BellIcon() {
+      return (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+          style={{ display:'inline', verticalAlign:'middle', marginRight:4 }}>
+          <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+          <path d="M13.73 21a2 2 0 01-3.46 0"/>
+        </svg>
+      )
+    }
+
+    const nav = {
+      background:'linear-gradient(90deg,#0a0a0a 0%,#1b5e20 50%,#2e7d32 100%)',
+      color:'#fff', display:'flex', alignItems:'center',
+      justifyContent:'space-between', padding:'0 16px',
+      height:54, boxShadow:'0 2px 12px rgba(0,0,0,0.3)',
+      position:'sticky', top:0, zIndex:100, flexShrink:0,
+    }
+    const left       = { display:'flex', alignItems:'center', gap:10, minWidth:0 }
+    const right      = { display:'flex', alignItems:'center', gap:12, flexShrink:0 }
+    const logoRing   = {
+      width:36, height:36, borderRadius:'50%',
+      border:'2px solid rgba(255,255,255,0.6)',
+      boxShadow:'0 0 0 1px rgba(255,255,255,0.2)',
+      overflow:'hidden', flexShrink:0,
+      background:'rgba(255,255,255,0.1)',
+    }
+    const roleTag    = {
+      display:'flex', alignItems:'center',
+      background:'rgba(255,255,255,0.15)', borderRadius:20,
+      padding:'3px 10px', fontSize:11, fontWeight:700, letterSpacing:0.5,
+      whiteSpace:'nowrap',
+    }
+    const alertBadge = {
+      display:'flex', alignItems:'center',
+      background:'#e53935', color:'#fff',
+      borderRadius:20, padding:'3px 10px', fontSize:12, fontWeight:700,
+    }
+    const userLabel  = { fontSize:13, opacity:0.9, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:160 }
+"""))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4.  Sidebar — proper items from handwritten notes + SVG icons, no emoji
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n[4] Patching Sidebar …")
+
+patch(SRC / "components" / "Sidebar.jsx", textwrap.dedent("""\
+    /* Sidebar — lucide-style SVG icons, no emoji.
+       Items from handwritten notes:
+         Home | Manage Devices | Manage Users | System Performance | Settings
+       Bottom: Change Password | Mode toggle | Language | Logout
+    */
+    import { useState } from 'react'
+
+    const LANGS = ['English','Swahili','French','Portuguese','Arabic']
+
+    /* ── All inline SVG icons ─────────────────────────────────────────────── */
+    const ICONS = {
+      home:        ['M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z', 'M9 22V12h6v10'],
+      devices:     ['M8 6h13', 'M8 12h13', 'M8 18h13', 'M3 6h.01', 'M3 12h.01', 'M3 18h.01'],
+      users:       ['M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2', 'M9 7a4 4 0 100 8 4 4 0 000-8z',
+                    'M23 21v-2a4 4 0 00-3-3.87', 'M16 3.13a4 4 0 010 7.75'],
+      performance: ['M18 20V10', 'M12 20V4', 'M6 20v-6'],
+      settings:    ['M12 20a8 8 0 100-16 8 8 0 000 16z',
+                    'M12 14a2 2 0 100-4 2 2 0 000 4z'],
+      password:    ['M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4'],
+      sun:         ['M12 1v2','M12 21v2','M4.22 4.22l1.42 1.42','M18.36 18.36l1.42 1.42',
+                    'M1 12h2','M21 12h2','M4.22 19.78l1.42-1.42','M18.36 5.64l1.42-1.42',
+                    'M12 17a5 5 0 100-10 5 5 0 000 10z'],
+      moon:        ['M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z'],
+      globe:       ['M12 2a10 10 0 100 20A10 10 0 0012 2z',
+                    'M2 12h20','M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20'],
+      logout:      ['M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4',
+                    'M16 17l5-5-5-5','M21 12H9'],
+    }
+
+    function SvgIcon({ name, size=20 }) {
+      const d = ICONS[name] || ICONS.home
+      if (name === 'devices') {
+        return (
+          <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            {d.map((p, i) => <path key={i} d={p}/>)}
+          </svg>
         )
-        urllib.request.urlopen(req, timeout=8)
-        return True
-    except Exception as e:
-        print(f'  [HTTP] POST failed: {e}')
-        return False
+      }
+      if (Array.isArray(d)) {
+        return (
+          <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            {d.map((p, i) => <path key={i} d={p}/>)}
+          </svg>
+        )
+      }
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d={d}/>
+        </svg>
+      )
+    }
 
-# -- MQTT callbacks (optional) -------------------------------------------------
-_running = True
+    /* ── Sidebar ─────────────────────────────────────────────────────────── */
+    export default function Sidebar({ active, onNav, onLogout, mode, onModeChange, lang, onLangChange }) {
+      const [modeOpen, setModeOpen] = useState(false)
+      const [langOpen, setLangOpen] = useState(false)
 
-def on_connect(client, userdata, flags, rc, props=None):
-    if rc == 0:
-        print(f'[MQTT] Connected: {BROKER}:{PORT}  topic: {TOPIC}')
-    else:
-        print(f'[MQTT] Connect failed rc={rc}')
+      const items = [
+        { id:'home',        iconName:'home',        label:'Home'        },
+        { id:'devices',     iconName:'devices',     label:'Devices'     },
+        { id:'users',       iconName:'users',       label:'Users'       },
+        { id:'performance', iconName:'performance', label:'Performance' },
+        { id:'settings',    iconName:'settings',    label:'Settings'    },
+      ]
 
-def on_disconnect(client, userdata, flags, rc, props=None):
-    if rc != 0:
-        print(f'[MQTT] Disconnected rc={rc} -- will retry on next publish')
+      return (
+        <aside style={{ ...sb, background: mode==='dark' ? '#1a2a1a' : '#1b5e20' }}>
+          {items.map(it => (
+            <SBBtn key={it.id} icon={<SvgIcon name={it.iconName} />} label={it.label}
+              active={active===it.id} onClick={() => onNav(it.id)} />
+          ))}
 
-def graceful_stop(sig, frame):
-    global _running
-    print('\\n[SIM] Stopping...')
-    _running = False
+          {/* Divider */}
+          <div style={{ width:40, height:1, background:'rgba(255,255,255,0.2)', margin:'6px 0' }} />
 
-# -- CLI -----------------------------------------------------------------------
-def parse_args():
-    p = argparse.ArgumentParser(description='SmartForest Simulator')
-    p.add_argument('--stop',      action='store_true', help='Stop a running instance')
-    p.add_argument('--interval',  type=float, default=INTERVAL)
-    p.add_argument('--spike',     type=float, default=SPIKE_CHANCE)
-    p.add_argument('--real-hw',   action='store_true', help='Use smf-* IDs')
-    p.add_argument('--http-only', action='store_true', help='Skip MQTT entirely')
-    return p.parse_args()
+          {/* Change password */}
+          <SBBtn icon={<SvgIcon name="password" />} label="Password" onClick={() => onNav('changepassword')} />
 
-# -- Main ------------------------------------------------------------------------
-def main():
-    global _running, USE_REAL_IDS, MIC_IDS, FLAME_IDS, PREFIX, INTERVAL, SPIKE_CHANCE
+          {/* Mode toggle */}
+          <div style={{ position:'relative' }}>
+            <SBBtn icon={<SvgIcon name={mode==='dark' ? 'moon' : 'sun'} />} label="Mode"
+              onClick={() => setModeOpen(v => !v)} />
+            {modeOpen && (
+              <div style={dropdown}>
+                {['light','dark'].map(m => (
+                  <button key={m} style={{ ...ddItem, fontWeight: mode===m ? 700 : 400 }}
+                    onClick={() => { onModeChange(m); setModeOpen(false) }}>
+                    {m === 'light' ? 'Light' : 'Dark'}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
-    args = parse_args()
+          {/* Language */}
+          <div style={{ position:'relative' }}>
+            <SBBtn icon={<SvgIcon name="globe" />} label="Language" onClick={() => setLangOpen(v => !v)} />
+            {langOpen && (
+              <div style={dropdown}>
+                {LANGS.map(l => (
+                  <button key={l} style={{ ...ddItem, fontWeight: lang===l ? 700 : 400 }}
+                    onClick={() => { onLangChange(l); setLangOpen(false) }}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
-    if args.stop:
-        SENTINEL.touch()
-        print(f'[SIM] Stop signal written: {SENTINEL}')
-        return
+          {/* Logout — pushed to bottom */}
+          <div style={{ marginTop:'auto' }}>
+            <SBBtn icon={<SvgIcon name="logout" />} label="Logout" onClick={onLogout} danger />
+          </div>
+        </aside>
+      )
+    }
 
-    INTERVAL     = args.interval
-    SPIKE_CHANCE = args.spike
-    if args.real_hw:
-        USE_REAL_IDS = True
-        PREFIX    = 'smf'
-        MIC_IDS   = [f'smf-m{str(i).zfill(2)}a' for i in range(1, 4)]
-        FLAME_IDS = [f'smf-f{str(i).zfill(2)}a' for i in range(1, 3)]
+    function SBBtn({ icon, label, active, onClick, danger }) {
+      const [hover, setHover] = useState(false)
+      return (
+        <button
+          title={label}
+          onClick={onClick}
+          onMouseEnter={() => setHover(true)}
+          onMouseLeave={() => setHover(false)}
+          style={{
+            display:'flex', flexDirection:'column', alignItems:'center',
+            justifyContent:'center', gap:4,
+            width:60, padding:'12px 0',
+            background: active
+              ? 'rgba(255,255,255,0.25)'
+              : hover
+                ? 'rgba(255,255,255,0.12)'
+                : 'transparent',
+            border:'none', cursor:'pointer',
+            color: danger ? '#ff8a80' : '#fff',
+            borderRadius:8,
+            transition:'background .15s',
+          }}
+        >
+          {icon}
+          <span style={{ fontSize:9, fontWeight:600, letterSpacing:0.4, opacity:0.85 }}>
+            {label}
+          </span>
+        </button>
+      )
+    }
 
-    signal.signal(signal.SIGINT,  graceful_stop)
-    signal.signal(signal.SIGTERM, graceful_stop)
-
-    if SENTINEL.exists():
-        SENTINEL.unlink()
-
-    hw_label = 'REAL HW' if USE_REAL_IDS else 'SIMULATOR'
-    print('=' * 60)
-    print('  SmartForest IoT Simulator')
-    print('=' * 60)
-    print(f'  Mode      : {hw_label}')
-    print(f'  Backend   : {BACKEND_URL}   (single env var: BACKEND_URL)')
-    print(f'  MIC IDs   : {MIC_IDS}')
-    print(f'  FLAME IDs : {FLAME_IDS}')
-    print(f'  Interval  : {INTERVAL}s ({INTERVAL/60:.1f} min)  |  Spike: {int(SPIKE_CHANCE*100)}%')
-    print()
-
-    if not probe_backend():
-        print(f'[SIM] WARNING: backend not reachable at {BACKEND_URL}')
-        print('[SIM] Will keep trying to POST each cycle -- check BACKEND_URL in .env')
-    else:
-        print(f'[SIM] Backend reachable: {BACKEND_URL}')
-
-    client = None
-    if HAS_MQTT and not args.http_only:
-        try:
-            client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-            client.on_connect    = on_connect
-            client.on_disconnect = on_disconnect
-            client.connect(BROKER, PORT, keepalive=60)
-            client.loop_start()
-            time.sleep(1.0)
-        except Exception as e:
-            print(f'[MQTT] Cannot connect: {e} -- continuing HTTP-only')
-            client = None
-    elif not HAS_MQTT:
-        print('[SIM] paho-mqtt not installed -- running HTTP-only')
-
-    print()
-    print('  Ctrl+C  or  python mqtt_simulator.py --stop  to exit')
-    print('-' * 60)
-
-    reads = 0
-    alerts_sent = 0
-
-    while _running:
-        if SENTINEL.exists():
-            SENTINEL.unlink()
-            print('[SIM] Stop sentinel detected -- exiting cleanly')
-            break
-
-        spike   = random.random() < SPIKE_CHANCE
-        use_mic = reads % 2 == 0
-        payload = make_mic(spike) if use_mic else make_flame(spike)
-
-        if client:
-            try:
-                client.publish(TOPIC, json.dumps(payload))
-            except Exception as e:
-                print(f'  [MQTT] Publish failed: {e}')
-
-        ok = post_reading(payload)
-
-        reads += 1
-        if spike:
-            alerts_sent += 1
-
-        ts   = datetime.now().strftime('%H:%M:%S')
-        d    = payload['device_id']
-        zone = payload['zone']
-        if use_mic:
-            reading = f"{payload['sound_db']} dB"
-            kind    = 'ALERT-LOG' if spike else 'mic-ok  '
-        else:
-            reading = f"{payload['temperature_c']} C"
-            kind    = 'ALERT-FIRE' if spike else 'flame-ok'
-
-        flag   = '\U0001f6a8' if spike else '  '
-        status = 'OK' if ok else 'FAIL'
-        print(f'{ts} {flag} {kind}  {d:<12}  {zone:<14}  {reading:<10}  http:{status}  [r:{reads} a:{alerts_sent}]')
-
-        time.sleep(INTERVAL)
-
-    print(f'\\n[SIM] Stopped. Total readings: {reads} | Alerts: {alerts_sent}')
-    if client:
-        client.loop_stop()
-        client.disconnect()
+    const sb = {
+      width:68, minHeight:'calc(100vh - 54px)',
+      display:'flex', flexDirection:'column',
+      alignItems:'center', gap:2, paddingTop:12, paddingBottom:12,
+      boxShadow:'2px 0 8px rgba(0,0,0,0.15)',
+      flexShrink:0,
+    }
+    const dropdown = {
+      position:'absolute', left:72, top:0,
+      background:'#fff', borderRadius:8, minWidth:130,
+      boxShadow:'0 4px 20px rgba(0,0,0,0.18)',
+      zIndex:200, overflow:'hidden',
+    }
+    const ddItem = {
+      display:'block', width:'100%', padding:'10px 16px',
+      background:'none', border:'none', cursor:'pointer',
+      fontSize:13, color:'#1b5e20', textAlign:'left',
+    }
+"""))
 
 
-if __name__ == '__main__':
-    main()
-'''
-write('simulator/mqtt_simulator.py', SIMULATOR_PY)
+# ─────────────────────────────────────────────────────────────────────────────
+# 5.  AdminDashboard — replace emoji stat cards + section titles with SVG icons
+#     Apply handwritten-notes spec:
+#       - Remove "alerts" word from top bar  (done in Navbar)
+#       - Remove "admin" word → "System Admin" (done in Navbar)
+#       - Total Users counter = customers only (excludes admins) per notes
+#       - Manage Devices icon/content area: first row = total/active/inactive cards
+#         second row = live alerts for newly activated devices (within 1 hr)
+#         last row = search/filter card showing all registered devices (5 rows)
+#         each row: device id, active/down status, owner email; suspend & delete btns
+#       - Home content: admin/user/log-report/system-breakdown cards
+#       - System section: dashboard card for system resources (cpu, memory, db)
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n[5] Patching AdminDashboard …")
+
+patch(SRC / "pages" / "AdminDashboard.jsx", textwrap.dedent(r"""
+    import { useState, useEffect, useRef, useCallback } from 'react'
+    import Navbar  from '../components/Navbar.jsx'
+    import Sidebar from '../components/Sidebar.jsx'
+    import ChangePasswordModal from '../components/ChangePasswordModal.jsx'
+    import { getAPI } from '../services/api.js'
+
+    /* ── Inline SVG icon primitives (lucide-style, no emoji) ── */
+    function Ico({ paths, size=16, color="currentColor", strokeWidth=2, fill="none" }) {
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24"
+          fill={fill} stroke={color} strokeWidth={strokeWidth}
+          strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}>
+          {[].concat(paths).map((p,i) => <path key={i} d={p}/>)}
+        </svg>
+      )
+    }
+    const I = {
+      users:    ['M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2','M9 7a4 4 0 100 8 4 4 0 000-8z','M23 21v-2a4 4 0 00-3-3.87','M16 3.13a4 4 0 010 7.75'],
+      device:   ['M5 12.55a11 11 0 0114.08 0','M1.42 9a16 16 0 0121.16 0','M8.53 16.11a6 6 0 016.95 0','M12 20h.01'],
+      active:   ['M22 11.08V12a10 10 0 11-5.93-9.14','M22 4L12 14.01l-3-3'],
+      alert:    ['M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z','M12 9v4','M12 17h.01'],
+      admin:    ['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'],
+      fire:     ['M8.5 14.5A2.5 2.5 0 0011 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 11-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 002.5 2.5z'],
+      saw:      ['M14.5 4h-5L7 7H4a2 2 0 00-2 2v9a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2h-3z','M10 13a2 2 0 104 0 2 2 0 00-4 0'],
+      mic:      ['M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z','M19 10v2a7 7 0 01-14 0v-2','M12 19v4','M8 23h8'],
+      temp:     ['M14 14.76V3.5a2.5 2.5 0 00-5 0v11.26a4.5 4.5 0 105 0z'],
+      trash:    ['M3 6h18','M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2'],
+      pause:    ['M6 4h4v16H6z','M14 4h4v16h-4z'],
+      play:     ['M5 3l14 9-14 9V3z'],
+      search:   ['M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0'],
+      plus:     ['M12 5v14','M5 12h14'],
+      check:    ['M20 6L9 17l-5-5'],
+      report:   ['M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z','M14 2v6h6','M16 13H8','M16 17H8','M10 9H8'],
+      cpu:      ['M9 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V5a2 2 0 00-2-2h-2','M9 3v2','M15 3v2','M9 21v-2','M15 21v-2','M3 9h2','M3 15h2','M19 9h2','M19 15h2'],
+      db:       ['M12 2C6.48 2 2 4.02 2 6.5v11C2 19.98 6.48 22 12 22s10-2.02 10-4.5v-11C22 4.02 17.52 2 12 2z','M2 6.5c0 2.48 4.48 4.5 10 4.5s10-2.02 10-4.5','M2 12c0 2.48 4.48 4.5 10 4.5s10-2.02 10-4.5'],
+    }
+
+    /* ── dot status ── */
+    function Dot({ on }) {
+      return (
+        <svg width="10" height="10" viewBox="0 0 10 10" style={{ flexShrink:0 }}>
+          <circle cx="5" cy="5" r="4.5" fill={on ? '#22c55e' : '#9ca3af'} />
+        </svg>
+      )
+    }
+
+    export default function AdminDashboard({ session, onLogout }) {
+      const [page,         setPage]         = useState('home')
+      const [mode,         setMode]         = useState('light')
+      const [lang,         setLang]         = useState('English')
+      const [showPwdModal, setShowPwdModal] = useState(false)
+
+      const [users,   setUsers]   = useState([])
+      const [devices, setDevices] = useState([])
+      const [alerts,  setAlerts]  = useState([])
+      const [sensors, setSensors] = useState([])
+      const [count,   setCount]   = useState(0)
+      const [loading, setLoading] = useState(true)
+      const [error,   setError]   = useState('')
+      const mountedRef = useRef(true)
+
+      const load = useCallback(async () => {
+        try {
+          const api = await getAPI()
+          const h = { headers: { Authorization: `Bearer ${session.token}` } }
+          const [u, d, a, s, c] = await Promise.all([
+            api.get('/admin/users',  h),
+            api.get('/devices/all',  h),
+            api.get('/alerts',       h),
+            api.get('/sensors/live', h),
+            api.get('/alerts/count', h),
+          ])
+          if (!mountedRef.current) return
+          setUsers(u.data   || [])
+          setDevices(d.data || [])
+          setAlerts(a.data  || [])
+          setSensors(s.data || [])
+          setCount(c.data?.count || 0)
+          setError('')
+        } catch {
+          if (mountedRef.current) setError('Could not load admin data.')
+        } finally {
+          if (mountedRef.current) setLoading(false)
+        }
+      }, [session.token])
+
+      useEffect(() => {
+        mountedRef.current = true
+        load()
+        const id = setInterval(load, 15_000)
+        return () => { mountedRef.current = false; clearInterval(id) }
+      }, [load])
+
+      useEffect(() => {
+        const r = document.documentElement
+        if (mode === 'dark') {
+          r.style.setProperty('--bg',      '#121212')
+          r.style.setProperty('--surface', '#1e1e1e')
+          r.style.setProperty('--text',    '#e0e0e0')
+        } else {
+          r.style.setProperty('--bg',      '#f1f8f2')
+          r.style.setProperty('--surface', '#ffffff')
+          r.style.setProperty('--text',    '#1b2e1b')
+        }
+      }, [mode])
+
+      function handleNav(id) {
+        if (id === 'changepassword') { setShowPwdModal(true); return }
+        setPage(id)
+      }
+
+      const bg      = mode === 'dark' ? '#121212' : '#f1f8f2'
+      const surface = mode === 'dark' ? '#1e1e1e' : '#ffffff'
+      const text    = mode === 'dark' ? '#e0e0e0' : '#1b2e1b'
+
+      // Customers = non-admin users (per handwritten notes)
+      const customers   = users.filter(u => u.role !== 'admin')
+      const admins      = users.filter(u => u.role === 'admin')
+      const activeCount = devices.filter(d => d.active).length
+
+      return (
+        <div style={{ minHeight:'100vh', background:bg, color:text,
+          fontFamily:"'Segoe UI',system-ui,sans-serif" }}>
+          <Navbar session={session} alertCount={count} role="admin" />
+
+          <div style={{ display:'flex' }}>
+            <Sidebar
+              active={page} onNav={handleNav} onLogout={onLogout}
+              mode={mode} onModeChange={setMode}
+              lang={lang}  onLangChange={setLang}
+            />
+
+            <main style={{ flex:1, padding:'24px 28px', maxWidth:1200 }}>
+              {error && <div style={errBanner}>{error}</div>}
+
+              {page === 'home' && (
+                <AdminHome
+                  users={users} customers={customers} devices={devices}
+                  alerts={alerts} sensors={sensors} count={count}
+                  admins={admins} activeCount={activeCount}
+                  loading={loading} surface={surface} text={text}
+                  session={session} onRefresh={load}
+                />
+              )}
+              {page === 'devices' && (
+                <AdminDevices devices={devices} alerts={alerts}
+                  session={session} onRefresh={load} surface={surface} text={text} />
+              )}
+              {page === 'users' && (
+                <AdminUserTable users={users} session={session} onRefresh={load}
+                  surface={surface} text={text} />
+              )}
+              {page === 'performance' && (
+                <SystemPerformance surface={surface} text={text} sensors={sensors}
+                  devices={devices} loading={loading} />
+              )}
+              {page === 'settings' && (
+                <SystemSettings surface={surface} text={text} />
+              )}
+            </main>
+          </div>
+
+          {showPwdModal && (
+            <ChangePasswordModal session={session} onClose={() => setShowPwdModal(false)} />
+          )}
+        </div>
+      )
+    }
+
+    /* ── Admin Home ─────────────────────────────────────────────────────── */
+    function AdminHome({ customers, devices, alerts, sensors, count,
+      admins, activeCount, loading, surface, text }) {
+
+      return (
+        <div style={{ display:'grid', gap:24 }}>
+          {/* ── Stat row ── */}
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:14 }}>
+            {[
+              { icon:<Ico paths={I.users} size={22} color="#1b5e20"/>,  label:'Total Customers', val:customers.length, color:'#1b5e20' },
+              { icon:<Ico paths={I.device} size={22} color="#2563eb"/>, label:'Total Devices',   val:devices.length,   color:'#2563eb' },
+              { icon:<Ico paths={I.active} size={22} color="#16a34a"/>, label:'Active Devices',  val:activeCount,      color:'#16a34a' },
+              { icon:<Ico paths={I.alert} size={22} color="#dc2626"/>,  label:'Open Alerts',     val:count,            color:'#dc2626' },
+              { icon:<Ico paths={I.admin} size={22} color="#7c3aed"/>,  label:'Admin Accounts',  val:admins.length,    color:'#7c3aed' },
+            ].map(c => (
+              <div key={c.label} style={{ ...statCard, background:surface, color:text }}>
+                {c.icon}
+                <span style={{ fontSize:11, opacity:0.65, marginTop:4 }}>{c.label}</span>
+                <span style={{ fontSize:28, fontWeight:800, color:c.color }}>
+                  {loading ? '…' : c.val}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* ── Log report card ── */}
+          <Section title="Log Report" icon={<Ico paths={I.report} size={16} color="#6b7280"/>}
+            surface={surface} text={text}>
+            {alerts.slice(0, 8).length === 0
+              ? <Empty>No alerts logged.</Empty>
+              : alerts.slice(0, 8).map(a => (
+                <div key={a.id} style={aRow}>
+                  <span style={{ color: a.alert_type==='fire' ? '#dc2626' : '#92400e', marginRight:4 }}>
+                    <Ico paths={a.alert_type==='fire' ? I.fire : I.saw} size={16} color="currentColor"/>
+                  </span>
+                  <div style={{ flex:1 }}>
+                    <strong style={{ fontSize:13 }}>{a.device_id}</strong>
+                    <span style={{ fontSize:11, color:'#6b7280' }}> · {a.zone} · {new Date(a.created_at).toLocaleString()}</span>
+                  </div>
+                  <span style={{ ...badge,
+                    background: a.status==='resolved' ? '#dcfce7' : '#fee2e2',
+                    color:       a.status==='resolved' ? '#16a34a' : '#dc2626' }}>
+                    {a.status}
+                  </span>
+                </div>
+              ))}
+          </Section>
+
+          {/* ── Live sensor readings ── */}
+          <Section title="Live Sensor Readings" icon={<Ico paths={I.device} size={16} color="#6b7280"/>}
+            surface={surface} text={text}>
+            {loading ? <Empty>Loading…</Empty> : sensors.length === 0
+              ? <Empty>No sensor data. Start the simulator.</Empty>
+              : (
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+                  <thead><tr>
+                    {['Device','Type','Zone','Reading','Alert','Time'].map(h =>
+                      <th key={h} style={th}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {sensors.map(s => (
+                      <tr key={s.id}>
+                        <td style={td}><strong>{s.device_id}</strong></td>
+                        <td style={td}>
+                          <span style={{ display:'flex', alignItems:'center', gap:5 }}>
+                            <Ico paths={s.sensor_type==='microphone' ? I.mic : I.fire} size={14}
+                              color={s.sensor_type==='microphone' ? '#2563eb' : '#dc2626'}/>
+                            {s.sensor_type === 'microphone' ? 'Mic' : 'Flame'}
+                          </span>
+                        </td>
+                        <td style={td}>{s.zone}</td>
+                        <td style={td}>
+                          {s.sensor_type==='microphone' ? `${s.sound_db} dB` : `${s.temperature_c}°C`}
+                        </td>
+                        <td style={td}>
+                          <span style={s.is_alert
+                            ? { ...badge, background:'#fee2e2', color:'#dc2626' }
+                            : { ...badge, background:'#dcfce7', color:'#16a34a' }}>
+                            <Dot on={!s.is_alert} /> {s.is_alert ? 'Alert' : 'OK'}
+                          </span>
+                        </td>
+                        <td style={{ ...td, fontSize:11, color:'#9ca3af' }}>
+                          {new Date(s.recorded_at).toLocaleString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+          </Section>
+        </div>
+      )
+    }
+
+    /* ── User Management ────────────────────────────────────────────────── */
+    function AdminUserTable({ users, session, onRefresh, surface, text }) {
+      const [adding, setAdding] = useState(false)
+      const [form,   setForm]   = useState({ name:'', email:'', password:'', role:'ranger' })
+      const [error,  setError]  = useState('')
+      const [ok,     setOk]     = useState('')
+      const adminCount = users.filter(u => u.role === 'admin').length
+
+      async function deleteUser(u) {
+        if (u.role === 'admin' && adminCount <= 1) { alert('Cannot delete the last admin account.'); return }
+        if (!confirm(`Delete user ${u.email}?`)) return
+        try {
+          const api = await getAPI()
+          await api.delete(`/admin/users/${u.id}`,
+            { headers: { Authorization: `Bearer ${session.token}` } })
+          onRefresh()
+        } catch (err) { alert(err?.response?.data?.error || 'Delete failed.') }
+      }
+
+      async function addAdmin(e) {
+        e.preventDefault(); setError(''); setOk('')
+        try {
+          const api = await getAPI()
+          await api.post('/admin/users',
+            { ...form, role:'admin' },
+            { headers: { Authorization: `Bearer ${session.token}` } })
+          setOk(`Admin ${form.email} created.`)
+          setForm({ name:'', email:'', password:'', role:'ranger' })
+          setAdding(false); onRefresh()
+        } catch (err) { setError(err?.response?.data?.error || 'Failed to create admin.') }
+      }
+
+      return (
+        <Section title="User Management"
+          icon={<Ico paths={I.users} size={16} color="#6b7280"/>}
+          surface={surface} text={text}>
+          <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:12 }}>
+            <button onClick={() => setAdding(v => !v)}
+              style={{ display:'flex', alignItems:'center', gap:5,
+                padding:'7px 16px', background:'#2e7d32', color:'#fff',
+                border:'none', borderRadius:7, fontWeight:700, cursor:'pointer', fontSize:13 }}>
+              <Ico paths={I.plus} size={14} color="#fff"/> {adding ? 'Cancel' : 'Add Admin'}
+            </button>
+          </div>
+
+          {adding && (
+            <div style={{ background:'#f9fef9', border:'1px solid #c8e6c9', borderRadius:8, padding:16, marginBottom:16 }}>
+              {error && <div style={errBanner}>{error}</div>}
+              {ok    && <div style={okBanner}>{ok}</div>}
+              <form onSubmit={addAdmin} style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+                {[['Full Name','name','text'],['Email','email','email'],['Password','password','password']].map(
+                  ([lbl,k,t]) => (
+                    <div key={k}>
+                      <label style={{ fontSize:12, fontWeight:600, display:'block', marginBottom:3 }}>{lbl}</label>
+                      <input type={t} value={form[k]} onChange={e => setForm(f => ({ ...f, [k]:e.target.value }))}
+                        required style={{ width:'100%', padding:'8px 10px', fontSize:13,
+                          border:'1.5px solid #c8e6c9', borderRadius:7, outline:'none' }} />
+                    </div>
+                  )
+                )}
+                <div style={{ gridColumn:'1/-1' }}>
+                  <button type="submit" style={{ padding:'8px 20px', background:'#1b5e20',
+                    color:'#fff', border:'none', borderRadius:7, fontWeight:700, cursor:'pointer' }}>
+                    Create Admin
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead><tr>
+              {['Name','Email','Role','Joined','Actions'].map(h => <th key={h} style={th}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {users.map(u => (
+                <tr key={u.id}>
+                  <td style={td}>{u.name || '—'}</td>
+                  <td style={td}>{u.email}</td>
+                  <td style={td}>
+                    <span style={u.role==='admin'
+                      ? { ...badge, background:'#dcfce7', color:'#15803d' }
+                      : { ...badge, background:'#dbeafe', color:'#1d4ed8' }}>
+                      {u.role}
+                    </span>
+                  </td>
+                  <td style={{ ...td, fontSize:11, color:'#9ca3af' }}>
+                    {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}
+                  </td>
+                  <td style={td}>
+                    <button
+                      title={u.role==='admin' && adminCount<=1 ? 'Cannot delete last admin' : 'Delete user'}
+                      onClick={() => deleteUser(u)}
+                      disabled={u.id === session?.user?.id}
+                      style={{ ...iconBtn, color:'#dc2626', opacity: u.id===session?.user?.id ? 0.3 : 1 }}>
+                      <Ico paths={I.trash} size={15} color="currentColor"/>
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Section>
+      )
+    }
+
+    /* ── Admin Devices page — per handwritten spec ───────────────────────── */
+    function AdminDevices({ devices, alerts, session, onRefresh, surface, text }) {
+      const [search, setSearch]   = useState('')
+      const [page,   setPage]     = useState(0)
+      const PAGE_SIZE = 5
+
+      // Set once after mount via useEffect — Date.now() never called during render
+      const [mountedAt, setMountedAt] = useState(0)
+      useEffect(() => { setMountedAt(Date.now()) }, [])
+
+      const ONE_HOUR = 60 * 60 * 1000
+      const recentlyActivated = mountedAt === 0 ? [] : devices.filter(d => {
+        if (!d.activated_at) return false
+        return (mountedAt - new Date(d.activated_at).getTime()) < ONE_HOUR
+      })
+
+      const filtered = devices.filter(d =>
+        d.device_id?.toLowerCase().includes(search.toLowerCase()) ||
+        d.owner_email?.toLowerCase().includes(search.toLowerCase())
+      )
+      const totalPages  = Math.ceil(filtered.length / PAGE_SIZE)
+      const pageDevices = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+
+      const activeCount   = devices.filter(d => d.active).length
+      const inactiveCount = devices.length - activeCount
+
+      async function deleteDevice(id) {
+        if (!confirm(`Delete device ${id}? All data will be removed.`)) return
+        try {
+          const api = await getAPI()
+          await api.delete(`/devices/${id}`,
+            { headers: { Authorization: `Bearer ${session.token}` } })
+          onRefresh()
+        } catch (err) { alert(err?.response?.data?.error || 'Delete failed.') }
+      }
+
+      async function toggleDevice(id, active) {
+        try {
+          const api = await getAPI()
+          await api.patch(`/devices/${id}/status`, { active: !active },
+            { headers: { Authorization: `Bearer ${session.token}` } })
+          onRefresh()
+        } catch (err) { alert(err?.response?.data?.error || 'Update failed.') }
+      }
+
+      return (
+        <div style={{ display:'grid', gap:20 }}>
+          {/* Row 1 — summary cards */}
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:14 }}>
+            {[
+              { label:'Registered Devices', val:devices.length,   icon:<Ico paths={I.device} size={22} color="#2563eb"/>, color:'#2563eb' },
+              { label:'Active Devices',     val:activeCount,       icon:<Ico paths={I.active} size={22} color="#16a34a"/>, color:'#16a34a' },
+              { label:'Inactive Devices',   val:inactiveCount,     icon:<Ico paths={I.alert}  size={22} color="#9ca3af"/>, color:'#9ca3af' },
+            ].map(c => (
+              <div key={c.label} style={{ ...statCard, background:surface, color:text }}>
+                {c.icon}
+                <span style={{ fontSize:11, opacity:0.65, marginTop:4 }}>{c.label}</span>
+                <span style={{ fontSize:26, fontWeight:800, color:c.color }}>{c.val}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Row 2 — live alerts for newly activated devices (within 1 hr) */}
+          <Section title="Live Alerts — Recently Activated Devices (last 1 hr)"
+            icon={<Ico paths={I.alert} size={15} color="#dc2626"/>}
+            surface={surface} text={text}>
+            {recentlyActivated.length === 0
+              ? <Empty>No newly activated devices in the last hour.</Empty>
+              : recentlyActivated.map(d => (
+                <div key={d.id} style={aRow}>
+                  <Dot on={d.active} />
+                  <strong style={{ fontSize:13, minWidth:120 }}>{d.device_id}</strong>
+                  <span style={{ fontSize:12, color:'#6b7280', flex:1 }}>{d.owner_email || '—'}</span>
+                  <span style={{ fontSize:11, color:'#6b7280' }}>{d.zone}</span>
+                  <span style={{ ...badge,
+                    background: d.active ? '#dcfce7' : '#fee2e2',
+                    color:       d.active ? '#16a34a' : '#dc2626' }}>
+                    {d.active ? 'Active' : 'Down'}
+                  </span>
+                </div>
+              ))}
+          </Section>
+
+          {/* Row 3 — search/filter + paginated device table */}
+          <Section title="All Registered Devices"
+            icon={<Ico paths={I.search} size={15} color="#6b7280"/>}
+            surface={surface} text={text}>
+            {/* search bar */}
+            <div style={{ display:'flex', gap:10, marginBottom:14 }}>
+              <div style={{ position:'relative', flex:1 }}>
+                <span style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)' }}>
+                  <Ico paths={I.search} size={14} color="#9ca3af"/>
+                </span>
+                <input
+                  type="text" placeholder="Filter by device ID or owner email…"
+                  value={search} onChange={e => { setSearch(e.target.value); setPage(0) }}
+                  style={{ width:'100%', padding:'8px 10px 8px 32px', fontSize:13,
+                    border:'1.5px solid #e5e7eb', borderRadius:8, outline:'none' }}
+                />
+              </div>
+            </div>
+
+            {devices.length === 0
+              ? <Empty>No devices in the system.</Empty>
+              : (
+                <>
+                  <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+                    <thead><tr>
+                      {['Device ID','Status','Owner Email','Location','Actions'].map(h =>
+                        <th key={h} style={th}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {pageDevices.map(d => (
+                        <tr key={d.id}>
+                          <td style={td}><strong>{d.device_id}</strong></td>
+                          <td style={td}>
+                            <span style={{ display:'flex', alignItems:'center', gap:5,
+                              ...badge,
+                              background: d.active ? '#dcfce7' : '#f3f4f6',
+                              color:       d.active ? '#16a34a' : '#6b7280' }}>
+                              <Dot on={d.active}/> {d.active ? 'Active' : 'Suspended'}
+                            </span>
+                          </td>
+                          <td style={td}>{d.owner_email || '—'}</td>
+                          <td style={td}>{d.zone || '—'}</td>
+                          <td style={td}>
+                            <div style={{ display:'flex', gap:8 }}>
+                              <button onClick={() => toggleDevice(d.device_id, d.active)}
+                                title={d.active ? 'Suspend' : 'Activate'}
+                                style={{ ...iconBtn, color: d.active ? '#f59e0b' : '#16a34a' }}>
+                                <Ico paths={d.active ? I.pause : I.play} size={15} color="currentColor"/>
+                              </button>
+                              <button onClick={() => deleteDevice(d.device_id)} title="Delete device"
+                                style={{ ...iconBtn, color:'#dc2626' }}>
+                                <Ico paths={I.trash} size={15} color="currentColor"/>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {/* Pagination */}
+                  {totalPages > 1 && (
+                    <div style={{ display:'flex', justifyContent:'center', gap:8, marginTop:14 }}>
+                      {Array.from({ length: totalPages }, (_, i) => (
+                        <button key={i} onClick={() => setPage(i)}
+                          style={{ padding:'4px 12px', borderRadius:6, border:'1.5px solid #e5e7eb',
+                            background: i===page ? '#2e7d32' : '#fff',
+                            color: i===page ? '#fff' : '#374151',
+                            fontWeight:600, cursor:'pointer', fontSize:12 }}>
+                          {i + 1}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+          </Section>
+
+          {/* All Alerts */}
+          <Section title="All Alerts"
+            icon={<Ico paths={I.alert} size={15} color="#6b7280"/>}
+            surface={surface} text={text}>
+            {alerts.slice(0,10).length === 0
+              ? <Empty>No alerts.</Empty>
+              : alerts.slice(0,10).map(a => (
+                <div key={a.id} style={aRow}>
+                  <Ico paths={a.alert_type==='fire' ? I.fire : I.saw} size={16}
+                    color={a.alert_type==='fire' ? '#dc2626' : '#92400e'}/>
+                  <div style={{ flex:1, fontSize:13 }}>
+                    <strong>{a.device_id}</strong> · {a.zone}
+                    <span style={{ fontSize:11, color:'#9ca3af' }}> · {new Date(a.created_at).toLocaleString()}</span>
+                  </div>
+                  <span style={{ ...badge,
+                    background: a.status==='resolved' ? '#dcfce7' : '#fee2e2',
+                    color:       a.status==='resolved' ? '#16a34a' : '#dc2626' }}>
+                    {a.status}
+                  </span>
+                </div>
+              ))}
+          </Section>
+        </div>
+      )
+    }
+
+    /* ── System Performance ─────────────────────────────────────────────── */
+    function SystemPerformance({ surface, text, sensors, devices, loading }) {
+      return (
+        <div style={{ display:'grid', gap:20 }}>
+          <Section title="System Resources"
+            icon={<Ico paths={I.cpu} size={16} color="#6b7280"/>}
+            surface={surface} text={text}>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))', gap:14 }}>
+              {[
+                { label:'CPU',       icon:<Ico paths={I.cpu}  size={20} color="#7c3aed"/>, val:'—', unit:'%',  color:'#7c3aed' },
+                { label:'Memory',    icon:<Ico paths={I.db}   size={20} color="#2563eb"/>, val:'—', unit:'%',  color:'#2563eb' },
+                { label:'DB',        icon:<Ico paths={I.db}   size={20} color="#16a34a"/>, val:'—', unit:'ms', color:'#16a34a' },
+                { label:'Uptime',    icon:<Ico paths={I.check} size={20} color="#f59e0b"/>,val:'—', unit:'hr', color:'#f59e0b' },
+              ].map(c => (
+                <div key={c.label} style={{ ...statCard, background:surface, color:text }}>
+                  {c.icon}
+                  <span style={{ fontSize:11, opacity:0.65, marginTop:4 }}>{c.label}</span>
+                  <span style={{ fontSize:22, fontWeight:800, color:c.color }}>{c.val}{c.unit}</span>
+                </div>
+              ))}
+            </div>
+            <p style={{ fontSize:12, color:'#9ca3af', marginTop:12 }}>
+              System resource metrics require a backend /system/stats endpoint.
+              Connect your backend to display live CPU, memory, DB latency and uptime.
+            </p>
+          </Section>
+
+          <Section title="Sensor Summary"
+            icon={<Ico paths={I.device} size={16} color="#6b7280"/>}
+            surface={surface} text={text}>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:14 }}>
+              {[
+                { label:'Total Sensors',  val: loading ? '…' : sensors.length,                              color:'#2563eb' },
+                { label:'Alerting',       val: loading ? '…' : sensors.filter(s=>s.is_alert).length,        color:'#dc2626' },
+                { label:'Total Devices',  val: loading ? '…' : devices.length,                              color:'#1b5e20' },
+              ].map(c => (
+                <div key={c.label} style={{ ...statCard, background:surface, color:text }}>
+                  <span style={{ fontSize:11, opacity:0.65 }}>{c.label}</span>
+                  <span style={{ fontSize:24, fontWeight:800, color:c.color }}>{c.val}</span>
+                </div>
+              ))}
+            </div>
+          </Section>
+        </div>
+      )
+    }
+
+    /* ── System Settings placeholder ─────────────────────────────────────── */
+    function SystemSettings({ surface, text }) {
+      return (
+        <Section title="System Settings"
+          icon={<Ico paths={['M12 20a8 8 0 100-16 8 8 0 000 16z','M12 14a2 2 0 100-4 2 2 0 000 4z']} size={16} color="#6b7280"/>}
+          surface={surface} text={text}>
+          <p style={{ color:'#9ca3af', fontSize:13, padding:'16px 0' }}>
+            System configuration settings will appear here.
+          </p>
+        </Section>
+      )
+    }
+
+    /* ── Section wrapper ─────────────────────────────────────────────────── */
+    function Section({ title, icon, children, surface, text }) {
+      return (
+        <div style={{ background:surface, borderRadius:12, padding:'20px 22px',
+          boxShadow:'0 1px 6px rgba(0,0,0,0.07)', color:text }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8,
+            fontSize:15, fontWeight:700, marginBottom:16, color:text }}>
+            {icon} {title}
+          </div>
+          {children}
+        </div>
+      )
+    }
+    function Empty({ children }) {
+      return <div style={{ textAlign:'center', padding:'32px', color:'#9ca3af', fontSize:13 }}>{children}</div>
+    }
+
+    /* ── Shared style tokens ─────────────────────────────────────────────── */
+    const statCard  = { borderRadius:10, padding:'16px 14px',
+      display:'flex', flexDirection:'column', gap:2, boxShadow:'0 1px 6px rgba(0,0,0,0.07)' }
+    const errBanner = { background:'#fee2e2', color:'#dc2626', borderRadius:8,
+      padding:'10px 14px', fontSize:13, marginBottom:12 }
+    const okBanner  = { background:'#dcfce7', color:'#16a34a', borderRadius:8,
+      padding:'10px 14px', fontSize:13, marginBottom:12 }
+    const th     = { textAlign:'left', padding:'8px 12px', background:'#f9fafb',
+      color:'#6b7280', fontWeight:600, borderBottom:'1px solid #e5e7eb', fontSize:12 }
+    const td     = { padding:'10px 12px', borderBottom:'1px solid #f3f4f6', verticalAlign:'middle' }
+    const badge  = { display:'inline-flex', alignItems:'center', gap:4,
+      padding:'3px 9px', borderRadius:20, fontSize:11, fontWeight:600 }
+    const iconBtn= { background:'none', border:'none', cursor:'pointer', padding:5, borderRadius:6,
+      display:'flex', alignItems:'center', justifyContent:'center' }
+    const aRow   = { display:'flex', alignItems:'center', gap:10, padding:'10px 12px',
+      borderBottom:'1px solid #f3f4f6' }
+"""))
 
 
-# ── 11. simulator/Dockerfile — for Render Background Worker ─────────────────
-write('simulator/Dockerfile', """
-FROM python:3.11-slim
+print("\n[SmartForest Patch] All done!")
+print("""
+Next steps:
+  1. cd SmartForest-main/frontend
+  2. Edit .env and set:
+       VITE_API_URL=https://your-render-app.onrender.com/api
+  3. npm install   (if not already done)
+  4. npm run dev   — test locally
 
-WORKDIR /app
-
-# System deps for paho-mqtt / dotenv (minimal, slim image)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-# No EXPOSE needed -- this is a worker, not a web service.
-# It only makes outbound HTTP/MQTT calls to BACKEND_URL.
-CMD ["python", "mqtt_simulator.py"]
+  For Vercel deployment:
+    • Go to Vercel → Your Project → Settings → Environment Variables
+    • Add:  VITE_API_URL = https://your-render-app.onrender.com/api
+    • Redeploy (Deployments → Redeploy) — Vite bakes the URL in at build time.
 """)
-
-# ── 12. simulator/.env.example — single BACKEND_URL ──────────────────────────
-write('simulator/.env.example', """
-# SmartForest Simulator -- single backend URL.
-# Doesn't matter if it's local or cloud -- just point it at whatever
-# backend you want this simulator instance to feed data into.
-#
-# Local development:
-#   BACKEND_URL=http://localhost:5000
-# Cloud (Render-hosted backend):
-#   BACKEND_URL=https://your-backend.onrender.com
-BACKEND_URL=http://localhost:5000
-
-# Optional MQTT (simulator works fine over HTTP alone if no broker is set up)
-MQTT_BROKER_HOST=localhost
-MQTT_BROKER_PORT=1883
-MQTT_TOPIC=forest/sensor/data
-
-# Reporting interval -- 180s (3 minutes) matches real hardware reporting rate
-SEND_INTERVAL=180
-SPIKE_CHANCE=0.20
-USE_REAL_IDS=false
-""")
-
-# ── 13. simulator/requirements.txt ───────────────────────────────────────────
-write('simulator/requirements.txt', """
-paho-mqtt>=2.0.0
-python-dotenv>=1.0.0
-pytest>=8.0.0
-""")
-
-
-# ── 14. SIMULATOR_HOSTING.md — full Render Background Worker walkthrough ─────
-write('SIMULATOR_HOSTING.md', """# Hosting the Simulator on Render
-
-**Yes — Dockerize it and run it as a Render Background Worker.**
-A Background Worker is exactly right here: the simulator only makes
-*outbound* HTTP/MQTT calls to your backend, it never needs to receive
-inbound traffic or have a public URL. Render's free-tier Background
-Workers fit this perfectly (no idle spin-down issue like free Web
-Services have, since there's no HTTP server to spin down).
-
-## What you get
-
-```
-simulator/
-  Dockerfile          <- builds the worker image
-  mqtt_simulator.py   <- the simulator itself
-  requirements.txt
-  .env.example
-```
-
-## Step-by-step: Deploy to Render
-
-1. **Push the `simulator/` folder to your GitHub repo** (already part of
-   the SmartForest monorepo — Render can build from a subdirectory).
-
-2. **Render Dashboard → New → Background Worker**
-
-3. **Connect your repo**, then configure:
-   - **Root Directory**: `simulator`
-   - **Environment**: `Docker`
-   - **Dockerfile Path**: `simulator/Dockerfile` (or just `Dockerfile` if
-     root directory is already `simulator`)
-
-4. **Environment variables** (Render Dashboard → your worker → Environment):
-   ```
-   BACKEND_URL=https://your-backend.onrender.com
-   SEND_INTERVAL=180
-   SPIKE_CHANCE=0.20
-   USE_REAL_IDS=false
-   ```
-   That's it — just `BACKEND_URL`. Point it at your backend's Render URL
-   (or any backend URL — local or cloud, the simulator doesn't care).
-
-5. **Deploy.** Render builds the Docker image and starts the worker.
-   Check the **Logs** tab — you should see:
-   ```
-   [SIM] Backend reachable: https://your-backend.onrender.com
-   12:03:01    mic-ok    smt-m01a      Kibiti-North    35.2 dB    http:OK  [r:1 a:0]
-   ```
-
-6. **To stop it**: Render Dashboard → your worker → **Suspend**.
-   (The `--stop` sentinel-file approach is for local/manual runs; on
-   Render, just suspend/resume the worker from the dashboard.)
-
-## Local run (no Docker needed)
-
-```bash
-cd simulator
-pip install -r requirements.txt
-cp .env.example .env          # edit BACKEND_URL if needed
-python mqtt_simulator.py
-```
-
-## Local run (with Docker, to test the exact image Render will use)
-
-```bash
-cd simulator
-docker build -t smartforest-simulator .
-docker run --rm \\
-  -e BACKEND_URL=http://host.docker.internal:5000 \\
-  smartforest-simulator
-```
-(`host.docker.internal` lets the container reach your locally-running
-backend; on Linux you may need `--add-host=host.docker.internal:host-gateway`.)
-
-## Why a Background Worker, not a Web Service
-
-A Web Service on Render's free tier spins down after ~15 minutes of no
-inbound HTTP traffic, and the simulator never receives inbound traffic —
-it only sends data out. Deploying it as a Web Service would cause Render
-to repeatedly spin it down for "inactivity" even while it's actively
-posting sensor data, killing your data flow. A Background Worker has no
-such inbound-traffic requirement and just keeps running.
-""")
-
-
-# ── 15. simulator/tests/test_simulator.py — updated for new simulator ────────
-TEST_SIM_PY = r'''# SmartForest Simulator Tests
-import sys, os, json
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
-os.environ.setdefault('BACKEND_URL',    'http://localhost:5000')
-os.environ.setdefault('MQTT_BROKER_HOST', 'localhost')
-os.environ.setdefault('SEND_INTERVAL',  '180')
-os.environ.setdefault('SPIKE_CHANCE',   '0.20')
-
-import mqtt_simulator as sim
-
-
-class TestPayloadGenerators:
-    def test_mic_normal_payload_schema(self):
-        p = sim.make_mic(spike=False)
-        assert 'device_id'   in p
-        assert 'sensor_type' in p
-        assert 'zone'        in p
-        assert 'sound_db'    in p
-        assert 'latitude'    in p
-        assert 'longitude'   in p
-        assert 'timestamp'   in p
-        assert p['sensor_type'] == 'microphone'
-
-    def test_mic_spike_high_db(self):
-        for _ in range(20):
-            p = sim.make_mic(spike=True)
-            assert p['sound_db'] >= 80
-
-    def test_mic_normal_low_db(self):
-        for _ in range(20):
-            p = sim.make_mic(spike=False)
-            assert p['sound_db'] < 80
-
-    def test_flame_normal_payload_schema(self):
-        p = sim.make_flame(spike=False)
-        assert 'device_id'      in p
-        assert 'sensor_type'    in p
-        assert 'flame_detected' in p
-        assert 'temperature_c'  in p
-        assert p['sensor_type'] == 'flame'
-        assert p['flame_detected'] == False
-
-    def test_flame_spike_detected(self):
-        p = sim.make_flame(spike=True)
-        assert p['flame_detected'] == True
-        assert p['temperature_c'] >= 55
-
-    def test_payload_json_serializable(self):
-        for fn, s in [(sim.make_mic, False), (sim.make_mic, True),
-                      (sim.make_flame, False), (sim.make_flame, True)]:
-            p = fn(s)
-            j = json.dumps(p)
-            assert isinstance(j, str)
-            assert len(j) > 10
-
-    def test_device_ids_format(self):
-        for _ in range(10):
-            mic_p = sim.make_mic(False)
-            assert mic_p['device_id'].startswith(sim.PREFIX + '-m')
-            flm_p = sim.make_flame(False)
-            assert flm_p['device_id'].startswith(sim.PREFIX + '-f')
-
-    def test_zone_is_valid(self):
-        valid_zones = {z['zone'] for z in sim.ZONES}
-        for _ in range(10):
-            p = sim.make_mic(False)
-            assert p['zone'] in valid_zones
-
-    def test_coordinates_near_kibiti(self):
-        for _ in range(10):
-            p = sim.make_mic(False)
-            assert -9.0 < p['latitude']  < -6.5
-            assert  37.5 < p['longitude'] < 40.5
-
-
-class TestDrift:
-    def test_drift_stays_within_bounds(self):
-        sim._state.clear()
-        for _ in range(50):
-            p = sim.make_mic(spike=False)
-            assert 18 <= p['sound_db'] <= 65
-
-    def test_drift_changes_gradually(self):
-        sim._state.clear()
-        device = sim.MIC_IDS[0]
-        sim._state[device] = 35
-        val1 = sim._drift(device, 35, 18, 65, 6)
-        val2 = sim._drift(device, 35, 18, 65, 6)
-        # consecutive drift steps should differ by at most 2x max_step
-        assert abs(val2 - val1) <= 12
-
-
-class TestSingleBackendUrl:
-    def test_backend_url_is_single_string(self):
-        assert isinstance(sim.BACKEND_URL, str)
-        assert sim.BACKEND_URL.startswith('http')
-
-    def test_no_priority_list_attribute(self):
-        # Ensure the old multi-candidate design is gone
-        assert not hasattr(sim, 'BACKEND_CANDIDATES')
-
-    def test_probe_returns_bool(self):
-        old_url = sim.BACKEND_URL
-        sim.BACKEND_URL = 'http://localhost:19999'
-        result = sim.probe_backend(timeout=1)
-        sim.BACKEND_URL = old_url
-        assert result is False
-
-
-class TestSentinel:
-    def test_sentinel_path_is_in_simulator_dir(self):
-        import pathlib
-        expected_dir = pathlib.Path(__file__).parent.parent
-        assert sim.SENTINEL.parent == expected_dir
-
-
-class TestInterval:
-    def test_default_interval_is_three_minutes(self):
-        assert sim.INTERVAL == 180
-'''
-write('simulator/tests/test_simulator.py', TEST_SIM_PY)
-
-
-# ── 16. database/migrations/007_sensor_ttl_index.sql ──────────────────────────
-write('database/migrations/007_sensor_ttl_index.sql', """
--- MIGRATION 007: index to make the 9-minute TTL cleanup sweep fast.
--- Run in Supabase SQL Editor (or it's covered automatically by
--- `npx prisma db push` if you're using the Prisma schema, since the
--- index already exists there as idx_sr_time).
---
--- This is the manual-SQL equivalent fallback for the TTL cleanup query:
---   DELETE FROM sensor_readings WHERE recorded_at < NOW() - INTERVAL '9 minutes';
-
-CREATE INDEX IF NOT EXISTS idx_sensor_readings_recorded_at
-  ON sensor_readings (recorded_at);
-
--- Optional: enable pg_cron for a DB-side scheduled sweep as a second
--- layer of defense, independent of whether the Node backend is awake.
--- Uncomment if your Supabase project has pg_cron enabled
--- (Database -> Extensions -> pg_cron):
---
--- SELECT cron.schedule(
---   'smartforest_sensor_ttl_sweep',
---   '* * * * *',  -- every minute
---   $$DELETE FROM sensor_readings WHERE recorded_at < NOW() - INTERVAL '9 minutes'$$
--- );
-""")
-
-
-# ── Final summary ─────────────────────────────────────────────────────────
-print()
-print('=' * 64)
-print('  single_env_patch applied!')
-print('=' * 64)
-print()
-print('1. SINGLE ENV VAR (no priority lists, no hardcoding):')
-print('     Frontend : VITE_API_URL     (frontend/.env)')
-print('     Simulator: BACKEND_URL      (simulator/.env)')
-print('   Set it to local OR cloud -- the app does not care which.')
-print()
-print('2. SIMULATOR now sends a NEW reading every 3 minutes (180s),')
-print('   with realistic gradual drift between readings instead of')
-print('   random jumps -- matches real hardware behaviour.')
-print()
-print('3. SENSOR DATA TTL: readings older than 9 minutes are deleted')
-print('   automatically (cleanupService runs every 60s + opportunistic')
-print('   prune after every write). Alerts are NEVER pruned -- incident')
-print('   history persists. Configurable via SENSOR_TTL_MINUTES.')
-print()
-print('4. SIMULATOR CAN BE DOCKERIZED AND HOSTED ON RENDER -- YES.')
-print('   Deploy as a Render BACKGROUND WORKER (not Web Service), since')
-print('   it only sends outbound data and never needs a public URL.')
-print('   Full steps in SIMULATOR_HOSTING.md.')
-print()
-print('NEXT STEPS:')
-print()
-print('  A) Update frontend/.env:')
-print('       VITE_API_URL=https://your-backend.onrender.com/api')
-print('     (or http://localhost:5000/api for local dev)')
-print('     Rebuild/redeploy after changing this.')
-print()
-print('  B) Update backend/.env (add if missing):')
-print('       SENSOR_TTL_MINUTES=9')
-print('       CLEANUP_INTERVAL_SECONDS=60')
-print()
-print('  C) Update simulator/.env:')
-print('       BACKEND_URL=https://your-backend.onrender.com')
-print('       SEND_INTERVAL=180')
-print()
-print('  D) Push schema (adds the TTL-supporting index):')
-print('       cd backend && npx prisma db push')
-print()
-print('  E) Deploy simulator to Render as a Background Worker:')
-print('       Root Directory : simulator')
-print('       Environment    : Docker')
-print('       Env var        : BACKEND_URL=<your backend URL>')
-print('     See SIMULATOR_HOSTING.md for full walkthrough.')
-print()
-print('  F) Run tests:')
-print('       cd backend && npm test')
-print('       cd simulator && pytest tests/ -v')
-print()
-print('Done!')
-
