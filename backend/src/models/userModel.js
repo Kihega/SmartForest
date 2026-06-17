@@ -57,10 +57,10 @@ const userModel = {
     } catch (e) {
       console.warn('[userModel] Prisma.create fallback:', e.message);
       const r = await pool.query(
-        \`INSERT INTO users (name, email, role)
+        `INSERT INTO users (name, email, role)
          VALUES (\$1,\$2,\$3)
          ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name
-         RETURNING *\`,
+         RETURNING *`,
         [name, email, role || 'customer']
       );
       return r.rows[0];
