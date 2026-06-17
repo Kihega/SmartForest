@@ -1,97 +1,106 @@
-"""Unit tests for simulator payload structure — both sensor types."""
-import json
-from datetime import datetime, timezone
+"""
+SmartForest Simulator Tests
+"""
 
-ZONES = [{'zone': 'Kibiti-North', 'lat': -7.72, 'lng': 38.95}]
+import sys, os, json
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+# Set env vars BEFORE importing simulator so config reads them
+os.environ.setdefault('BACKEND_URL_LOCAL', 'http://localhost:5000')
+os.environ.setdefault('MQTT_BROKER_HOST',  'localhost')
+os.environ.setdefault('SEND_INTERVAL',     '5')
+os.environ.setdefault('SPIKE_CHANCE',      '0.20')
 
-def make_microphone_payload(spike=False):
-    zone = ZONES[0]
-    return {
-        'device_id'   : 'MIC-001',
-        'sensor_type' : 'microphone',
-        'timestamp'   : datetime.now(timezone.utc).isoformat(),
-        'zone'        : zone['zone'],
-        'latitude'    : zone['lat'],
-        'longitude'   : zone['lng'],
-        'sound_db'    : 90.0 if spike else 40.0,
-    }
+import mqtt_simulator as sim
 
 
-def make_flame_payload(spike=False):
-    zone = ZONES[0]
-    return {
-        'device_id'      : 'FLAME-001',
-        'sensor_type'    : 'flame',
-        'timestamp'      : datetime.now(timezone.utc).isoformat(),
-        'zone'           : zone['zone'],
-        'latitude'       : zone['lat'],
-        'longitude'      : zone['lng'],
-        'flame_detected' : spike,
-        'temperature_c'  : 72.5 if spike else 28.0,
-    }
+class TestPayloadGenerators:
+    def test_mic_normal_payload_schema(self):
+        p = sim.make_mic(spike=False)
+        assert 'device_id'    in p
+        assert 'sensor_type'  in p
+        assert 'zone'         in p
+        assert 'sound_db'     in p
+        assert 'latitude'     in p
+        assert 'longitude'    in p
+        assert 'timestamp'    in p
+        assert p['sensor_type'] == 'microphone'
+
+    def test_mic_spike_high_db(self):
+        for _ in range(20):
+            p = sim.make_mic(spike=True)
+            assert p['sound_db'] >= 80, f"spike reading {p['sound_db']} below threshold"
+
+    def test_mic_normal_low_db(self):
+        for _ in range(20):
+            p = sim.make_mic(spike=False)
+            assert p['sound_db'] < 80, f"normal reading {p['sound_db']} above threshold"
+
+    def test_flame_normal_payload_schema(self):
+        p = sim.make_flame(spike=False)
+        assert 'device_id'      in p
+        assert 'sensor_type'    in p
+        assert 'flame_detected' in p
+        assert 'temperature_c'  in p
+        assert p['sensor_type'] == 'flame'
+        assert p['flame_detected'] == False
+
+    def test_flame_spike_detected(self):
+        p = sim.make_flame(spike=True)
+        assert p['flame_detected'] == True
+        assert p['temperature_c'] >= 55
+
+    def test_payload_json_serializable(self):
+        for fn, s in [(sim.make_mic, False), (sim.make_mic, True),
+                      (sim.make_flame, False), (sim.make_flame, True)]:
+            p = fn(s)
+            j = json.dumps(p)
+            assert isinstance(j, str)
+            assert len(j) > 10
+
+    def test_device_ids_format(self):
+        for _ in range(10):
+            mic_p = sim.make_mic(False)
+            assert mic_p['device_id'].startswith(sim.PREFIX + '-m')
+            flm_p = sim.make_flame(False)
+            assert flm_p['device_id'].startswith(sim.PREFIX + '-f')
+
+    def test_zone_is_valid(self):
+        valid_zones = {z['zone'] for z in sim.ZONES}
+        for _ in range(10):
+            p = sim.make_mic(False)
+            assert p['zone'] in valid_zones
+
+    def test_coordinates_near_kibiti(self):
+        """Coordinates should be within ~1 degree of Kibiti, Tanzania"""
+        for _ in range(10):
+            p = sim.make_mic(False)
+            assert -9.0 < p['latitude']  < -6.5
+            assert  37.5 < p['longitude'] < 40.5
 
 
-# ── Microphone tests ─────────────────────────────────────
-def test_mic_payload_has_required_fields():
-    p = make_microphone_payload()
-    for f in ['device_id','sensor_type','timestamp',
-              'zone','latitude','longitude','sound_db']:
-        assert f in p, f'Missing: {f}'
+class TestBackendCandidates:
+    def test_candidates_list_not_empty(self):
+        assert len(sim.BACKEND_CANDIDATES) >= 1
+
+    def test_local_candidate_present(self):
+        assert any('localhost' in c for c in sim.BACKEND_CANDIDATES)
+
+    def test_probe_returns_bool(self):
+        # Probe a definitely-closed port — should return False quickly
+        result = sim.probe('http://localhost:19999', timeout=1)
+        assert result is False
+
+    def test_resolve_returns_none_when_all_down(self, monkeypatch):
+        # Patch probe to always fail
+        monkeypatch.setattr(sim, 'probe', lambda url, t=3: False)
+        sim._resolved = None  # reset cache if module-level
+        result = sim.resolve_backend()
+        assert result is None
 
 
-def test_mic_sensor_type_is_microphone():
-    assert make_microphone_payload()['sensor_type'] == 'microphone'
-
-
-def test_mic_spike_exceeds_threshold():
-    p = make_microphone_payload(spike=True)
-    assert p['sound_db'] > 80, 'Spike should exceed 80dB threshold'
-
-
-def test_mic_normal_below_threshold():
-    p = make_microphone_payload(spike=False)
-    assert p['sound_db'] < 80, 'Normal reading should be below 80dB'
-
-
-def test_mic_sound_db_is_float():
-    assert isinstance(make_microphone_payload()['sound_db'], float)
-
-
-# ── Flame sensor tests ───────────────────────────────────
-def test_flame_payload_has_required_fields():
-    p = make_flame_payload()
-    for f in ['device_id','sensor_type','timestamp',
-              'zone','latitude','longitude',
-              'flame_detected','temperature_c']:
-        assert f in p, f'Missing: {f}'
-
-
-def test_flame_sensor_type_is_flame():
-    assert make_flame_payload()['sensor_type'] == 'flame'
-
-
-def test_flame_spike_triggers_alert():
-    p = make_flame_payload(spike=True)
-    assert p['flame_detected'] is True or p['temperature_c'] > 55
-
-
-def test_flame_normal_no_alert():
-    p = make_flame_payload(spike=False)
-    assert p['flame_detected'] is False
-    assert p['temperature_c'] < 55
-
-
-def test_flame_temperature_is_float():
-    assert isinstance(make_flame_payload()['temperature_c'], float)
-
-
-# ── Payload JSON serializable ────────────────────────────
-def test_mic_payload_json_serializable():
-    p = make_microphone_payload(spike=True)
-    assert json.dumps(p)  # should not raise
-
-
-def test_flame_payload_json_serializable():
-    p = make_flame_payload(spike=True)
-    assert json.dumps(p)
+class TestSentinel:
+    def test_sentinel_path_is_in_simulator_dir(self):
+        import pathlib
+        expected_dir = pathlib.Path(__file__).parent.parent
+        assert sim.SENTINEL.parent == expected_dir
