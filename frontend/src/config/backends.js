@@ -1,14 +1,15 @@
 
 /**
- * backends.js — centralised backend URL resolver (frontend)
+ * backends.js — single source of truth for the backend URL (frontend).
  *
- * Priority order (all URLs come from VITE_ env vars — never hardcoded):
- *   1. VITE_API_URL_LOCAL   (default: http://localhost:5000/api)
- *   2. VITE_API_URL_CLOUD   (Render.com / any hosted backend)
- *   3. VITE_API_URL_EXTRA   (optional third fallback, e.g. staging)
+ * ONE env var, no priority list, no hardcoded fallback list:
+ *   VITE_API_URL   — set this in frontend/.env to whatever is running:
+ *                     local  -> http://localhost:5000/api
+ *                     cloud  -> https://your-app.onrender.com/api
  *
- * The resolver tries each URL in order with a short timeout.
- * The first reachable one is cached for the session.
+ * The app doesn't care which one it is — it just uses whatever URL is
+ * configured. Switching environments means changing ONE line in .env
+ * and rebuilding (Vite bakes env vars in at build time).
  *
  * Usage:
  *   import { getAPI } from '../config/backends.js'
@@ -17,59 +18,46 @@
  */
 import axios from 'axios';
 
-// Pull URLs from Vite env — never hardcode here
-const CANDIDATE_URLS = [
-  import.meta.env.VITE_API_URL_LOCAL  || 'http://localhost:5000/api',
-  import.meta.env.VITE_API_URL_CLOUD  || '',
-  import.meta.env.VITE_API_URL_EXTRA  || '',
-].filter(Boolean).filter((v, i, a) => v && a.indexOf(v) === i); // dedup + remove empty
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
-let _resolved = null;   // cached after first successful check
-let _checking = null;   // in-flight promise (prevents parallel races)
+let _checked = false;
+let _reachable = null;
 
-async function probe(url, timeoutMs) {
+async function probe() {
   try {
-    await axios.get(url.replace(/\/api$/, '') + '/api/health', { timeout: timeoutMs });
+    await axios.get(API_URL.replace(/\/api$/, '') + '/api/health', { timeout: 6000 });
     return true;
   } catch {
     return false;
   }
 }
 
+/** Resolves to the configured API_URL. Throws NO_BACKEND if unreachable. */
 export async function resolveBackend() {
-  if (_resolved) return _resolved;
-  if (_checking) return _checking;
-
-  _checking = (async () => {
-    for (const url of CANDIDATE_URLS) {
-      const timeout = url.includes('localhost') ? 2000 : 5000;
-      if (await probe(url, timeout)) {
-        _resolved = url;
-        console.info('[Backend] Connected:', url);
-        _checking = null;
-        return url;
-      }
-      console.warn('[Backend] Unreachable:', url);
-    }
-    _checking = null;
+  if (_checked && _reachable) return API_URL;
+  const ok = await probe();
+  _checked = true;
+  _reachable = ok;
+  if (!ok) {
+    console.warn('[Backend] Unreachable:', API_URL);
     throw new Error('NO_BACKEND');
-  })();
-
-  return _checking;
+  }
+  console.info('[Backend] Connected:', API_URL);
+  return API_URL;
 }
 
-/** Reset cache — forces re-probe on next call (useful after network change) */
+/** Forces a fresh reachability check on next call. */
 export function resetBackend() {
-  _resolved = null;
-  _checking = null;
+  _checked = false;
+  _reachable = null;
 }
 
-/** Get an axios instance pointed at the resolved backend */
+/** Returns an axios instance pointed at the configured backend. */
 export async function getAPI(token) {
   const baseURL = await resolveBackend();
   const headers = token ? { Authorization: `Bearer ${token}` } : {};
   return axios.create({ baseURL, headers });
 }
 
-/** Raw list of candidates (for debug/status display) */
-export const BACKEND_CANDIDATES = CANDIDATE_URLS;
+/** The single configured URL (for status display / debugging). */
+export const BACKEND_URL = API_URL;
