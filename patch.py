@@ -1,19 +1,13 @@
+# patch_usermodel.py
 from pathlib import Path
 
-f = Path("simulator/mqtt_simulator.py")
+f = Path("backend/src/models/userModel.js")
 
-text = f.read_text()
+text = f.read_text(encoding="utf-8")
 
-text = text.replace(
-    "Path(__file__).parent / '../STOP_SIMULATOR'",
-    "Path(__file__).resolve().parent / 'STOP_SIMULATOR'"
-)
+# Fix escaped template literals
+text = text.replace("\\`", "`")
 
-text = text.replace(
-    'Path(__file__).parent / "../STOP_SIMULATOR"',
-    "Path(__file__).resolve().parent / 'STOP_SIMULATOR'"
-)
+f.write_text(text, encoding="utf-8")
 
-f.write_text(text)
-
-print("✅ SENTINEL path fixed")
+print("✅ Fixed escaped backticks in userModel.js")
