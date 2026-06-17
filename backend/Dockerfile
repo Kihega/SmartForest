@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:20-bookworm
 WORKDIR /app
 
 # Build args so prisma generate works at build time without real DB creds.
@@ -13,7 +13,7 @@ COPY package*.json ./
 COPY prisma ./prisma/
 
 # Install — postinstall hook runs prisma generate automatically
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 
 # Copy remaining source
 COPY . .

@@ -7,8 +7,9 @@
 // the direct db.xxx.supabase.co:5432 host.
 
 generator client {
-  provider = "prisma-client-js"
-  output   = "../node_modules/.prisma/client"
+  provider      = "prisma-client-js"
+  output        = "../node_modules/.prisma/client"
+  binaryTargets = ["native"]
 }
 
 datasource db {
