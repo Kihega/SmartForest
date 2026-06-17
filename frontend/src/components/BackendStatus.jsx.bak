@@ -1,26 +1,9 @@
+
 import { useEffect, useState } from 'react'
 import { resolveBackend, resetBackend, BACKEND_URL } from '../config/backends.js'
 
-function DotIcon({ color }) {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" style={{ flexShrink:0 }}>
-      <circle cx="6" cy="6" r="5" fill={color} />
-    </svg>
-  )
-}
-
-function RefreshIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="23 4 23 10 17 10"/>
-      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-    </svg>
-  )
-}
-
 export default function BackendStatus() {
-  const [status, setStatus] = useState('checking')
+  const [status, setStatus] = useState('checking')   // 'checking' | 'online' | 'offline'
 
   async function check() {
     setStatus('checking')
@@ -43,7 +26,7 @@ export default function BackendStatus() {
   return (
     <div style={status === 'checking' ? styles.checking : styles.offline}>
       <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-        <DotIcon color={status === 'checking' ? '#fbbf24' : '#fff'} />
+        <span>{status === 'checking' ? '🟡' : '🔴'}</span>
         <div>
           <div style={{ fontWeight:700, fontSize:13 }}>
             Backend {status === 'checking' ? 'connecting…' : 'offline'}
@@ -56,7 +39,7 @@ export default function BackendStatus() {
         </div>
         {status === 'offline' && (
           <button onClick={() => { resetBackend(); check() }} style={styles.retryBtn}>
-            <RefreshIcon /> Retry
+            Retry
           </button>
         )}
       </div>
@@ -75,7 +58,6 @@ const styles = {
   checking: { ...base, background:'#d97706' },
   offline:  { ...base, background:'#dc2626' },
   retryBtn: {
-    display:'flex', alignItems:'center', gap:4,
     background:'rgba(255,255,255,0.25)', border:'1px solid rgba(255,255,255,0.5)',
     color:'#fff', borderRadius:6, padding:'4px 10px',
     fontSize:12, cursor:'pointer', marginLeft:4,

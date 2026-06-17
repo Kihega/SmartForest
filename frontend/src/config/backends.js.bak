@@ -1,12 +1,15 @@
+
 /**
  * backends.js — single source of truth for the backend URL (frontend).
  *
- * ONE env var controls everything:
- *   VITE_API_URL   — set in frontend/.env  (local)
- *                    OR in Vercel → Project Settings → Environment Variables
+ * ONE env var, no priority list, no hardcoded fallback list:
+ *   VITE_API_URL   — set this in frontend/.env to whatever is running:
+ *                     local  -> http://localhost:5000/api
+ *                     cloud  -> https://your-app.onrender.com/api
  *
- * Vite bakes the value in at build time, so a redeploy is needed after
- * changing the variable on Vercel.
+ * The app doesn't care which one it is — it just uses whatever URL is
+ * configured. Switching environments means changing ONE line in .env
+ * and rebuilding (Vite bakes env vars in at build time).
  *
  * Usage:
  *   import { getAPI } from '../config/backends.js'
@@ -15,18 +18,9 @@
  */
 import axios from 'axios';
 
-// MUST be set via env — no hardcoded fallback so misconfigurations are obvious.
-const API_URL = import.meta.env.VITE_API_URL;
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
-if (!API_URL) {
-  console.error(
-    '[SmartForest] VITE_API_URL is not set.\n' +
-    'Local: add VITE_API_URL=http://localhost:5000/api to frontend/.env\n' +
-    'Vercel: add VITE_API_URL in Project Settings → Environment Variables, then redeploy.'
-  );
-}
-
-let _checked  = false;
+let _checked = false;
 let _reachable = null;
 
 async function probe() {
@@ -40,10 +34,9 @@ async function probe() {
 
 /** Resolves to the configured API_URL. Throws NO_BACKEND if unreachable. */
 export async function resolveBackend() {
-  if (!API_URL) throw new Error('NO_BACKEND');
   if (_checked && _reachable) return API_URL;
   const ok = await probe();
-  _checked  = true;
+  _checked = true;
   _reachable = ok;
   if (!ok) {
     console.warn('[Backend] Unreachable:', API_URL);
@@ -55,7 +48,7 @@ export async function resolveBackend() {
 
 /** Forces a fresh reachability check on next call. */
 export function resetBackend() {
-  _checked  = false;
+  _checked = false;
   _reachable = null;
 }
 
@@ -67,4 +60,4 @@ export async function getAPI(token) {
 }
 
 /** The single configured URL (for status display / debugging). */
-export const BACKEND_URL = API_URL || '(VITE_API_URL not set)';
+export const BACKEND_URL = API_URL;
