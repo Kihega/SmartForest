@@ -1,3 +1,4 @@
+
 const express   = require('express');
 const router    = express.Router();
 const supabase  = require('../config/supabase');
@@ -7,12 +8,38 @@ const userModel = require('../models/userModel');
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
-    return res.status(400).json({ error: 'email and password are required' });
+    return res.status(400).json({
+      error : 'email and password are required',
+      reason: 'missing_fields',
+    });
   }
-  try {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) return res.status(401).json({ error: error.message });
 
+  let result;
+  try {
+    result = await supabase.auth.signInWithPassword({ email, password });
+  } catch (networkErr) {
+    // Supabase project unreachable, wrong URL, or service down —
+    // this is DIFFERENT from a wrong password, and the user needs to
+    // know it's not their fault.
+    console.error('[auth] Supabase unreachable:', networkErr.message);
+    return res.status(503).json({
+      error : 'Cannot reach the authentication service right now. Please try again shortly.',
+      reason: 'supabase_unreachable',
+    });
+  }
+
+  const { data, error } = result;
+  if (error) {
+    // Log full detail server-side for debugging deploys; never leak
+    // Supabase internals to the client beyond a safe, clear message.
+    console.warn('[auth] Login rejected for', email, '-', error.message, '| status:', error.status);
+    return res.status(401).json({
+      error : 'Incorrect email or password.',
+      reason: 'invalid_credentials',
+    });
+  }
+
+  try {
     const profile = await userModel.create({
       name  : data.user.user_metadata?.name || email.split('@')[0],
       email : data.user.email,
@@ -30,8 +57,14 @@ router.post('/login', async (req, res) => {
         name  : profile.name,
       }
     });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (dbErr) {
+    // Auth succeeded but our own DB profile sync failed (e.g. Prisma
+    // can't reach DATABASE_URL). Tell the truth instead of "login failed".
+    console.error('[auth] Profile sync failed after successful auth:', dbErr.message);
+    res.status(500).json({
+      error : 'Signed in, but could not load your profile. Please try again.',
+      reason: 'profile_sync_failed',
+    });
   }
 });
 
@@ -50,12 +83,13 @@ router.post('/register', async (req, res) => {
       email, password,
       options: { data: { name, phone: phone || '', role: 'customer' } }
     });
-    if (error) return res.status(400).json({ error: error.message });
+    if (error) return res.status(400).json({ error: error.message, reason: 'signup_rejected' });
 
     await userModel.create({ name, email, role: 'customer' });
     res.status(201).json({ message: 'Account created. Please sign in.' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[auth] Register error:', err.message);
+    res.status(500).json({ error: err.message, reason: 'server_error' });
   }
 });
 
@@ -68,17 +102,14 @@ router.post('/change-password', async (req, res) => {
     return res.status(400).json({ error: 'New password must be at least 8 characters' });
 
   try {
-    // Verify current token belongs to a valid session
     const { data: userData, error: ue } = await supabase.auth.getUser(token);
     if (ue) return res.status(401).json({ error: 'Invalid session' });
 
-    // Re-authenticate with current password to verify it
     const { error: loginErr } = await supabase.auth.signInWithPassword({
       email: userData.user.email, password: currentPassword,
     });
     if (loginErr) return res.status(401).json({ error: 'Current password is incorrect' });
 
-    // Update password
     const { error: updateErr } = await supabase.auth.updateUser({ password: newPassword });
     if (updateErr) return res.status(400).json({ error: updateErr.message });
 

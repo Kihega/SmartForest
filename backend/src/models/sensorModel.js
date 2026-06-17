@@ -1,6 +1,9 @@
+
 'use strict';
 const prisma = require('../config/prisma');
 const pool   = require('../config/db');
+
+const TTL_MINUTES = parseInt(process.env.SENSOR_TTL_MINUTES || '9', 10);
 
 function toSnake(s) {
   if (!s) return null;
@@ -19,6 +22,18 @@ function toSnake(s) {
   };
 }
 
+// Opportunistic prune — runs after every write so stale rows never linger
+// even if the scheduled cleanupService tick hasn't fired yet.
+// Fire-and-forget: never blocks or fails the write that triggered it.
+function pruneAsync() {
+  const cutoff = new Date(Date.now() - TTL_MINUTES * 60000);
+  prisma.sensorReading.deleteMany({ where: { recordedAt: { lt: cutoff } } })
+    .catch(() => {
+      const sql = "DELETE FROM sensor_readings WHERE recorded_at < NOW() - INTERVAL '" + TTL_MINUTES + " minutes'";
+      pool.query(sql).catch(() => { /* best-effort, ignore */ });
+    });
+}
+
 const sensorModel = {
 
   async saveReading(data) {
@@ -27,6 +42,7 @@ const sensorModel = {
       zone, latitude, longitude,
       sound_db, flame_detected, temperature_c, is_alert,
     } = data;
+    let saved;
     try {
       const r = await prisma.sensorReading.create({
         data: {
@@ -39,7 +55,7 @@ const sensorModel = {
           isAlert       : is_alert       ?? false,
         },
       });
-      return toSnake(r);
+      saved = toSnake(r);
     } catch (e) {
       console.warn('[sensorModel] Prisma.saveReading fallback:', e.message);
       const r = await pool.query(
@@ -50,8 +66,10 @@ const sensorModel = {
         [device_id, sensor_type, zone, latitude, longitude,
          sound_db??null, flame_detected??false, temperature_c??null, is_alert??false]
       );
-      return r.rows[0];
+      saved = r.rows[0];
     }
+    pruneAsync();   // fire-and-forget TTL sweep
+    return saved;
   },
 
   async getAll(limit = 100) {
@@ -71,10 +89,7 @@ const sensorModel = {
   },
 
   async getLive() {
-    // "Latest reading per device" — Prisma doesn't support DISTINCT ON,
-    // so we use groupBy + findFirst pattern (or raw query as fallback).
     try {
-      // Get distinct device IDs first, then latest reading for each
       const devices = await prisma.sensorReading.findMany({
         distinct: ['deviceId'],
         orderBy:  { recordedAt: 'desc' },

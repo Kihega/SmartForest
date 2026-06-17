@@ -52,7 +52,21 @@ export default function Login({ onLogin }) {
       const res = await api.post('/auth/login', { email, password })
       onLogin(res.data)
     } catch (err) {
-      setError(err?.response?.data?.error || 'Login failed. Check your credentials.')
+      const reason = err?.response?.data?.reason
+      const serverMsg = err?.response?.data?.error
+      if (err?.message === 'NO_BACKEND') {
+        setError('Cannot reach any backend server. Check your internet connection or try again shortly.')
+      } else if (reason === 'invalid_credentials') {
+        setError(serverMsg || 'Incorrect email or password.')
+      } else if (reason === 'supabase_unreachable') {
+        setError('Authentication service is temporarily unavailable. Please try again in a moment.')
+      } else if (reason === 'profile_sync_failed') {
+        setError('Signed in, but could not load your profile. Please try again.')
+      } else if (serverMsg) {
+        setError(serverMsg)
+      } else {
+        setError('Could not reach the server. Please check your connection and try again.')
+      }
     } finally {
       setLoading(false)
     }

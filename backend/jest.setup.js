@@ -155,3 +155,11 @@ jest.mock('mqtt', () => ({
 // ── Suppress console noise in test output ────────────────────────────────────
 global.console.error = jest.fn();
 global.console.warn  = jest.fn();
+
+// -- cleanupService -- mocked so tests never start real intervals
+jest.mock('./src/services/cleanupService', () => ({
+  pruneOldReadings    : jest.fn().mockResolvedValue(0),
+  startCleanupSchedule: jest.fn(),
+  stopCleanupSchedule : jest.fn(),
+  TTL_MINUTES: 9,
+}));

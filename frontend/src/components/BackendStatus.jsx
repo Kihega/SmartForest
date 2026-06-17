@@ -1,9 +1,9 @@
 
 import { useEffect, useState } from 'react'
-import { resolveBackend, resetBackend, BACKEND_CANDIDATES } from '../config/backends.js'
+import { resolveBackend, resetBackend, BACKEND_URL } from '../config/backends.js'
 
 export default function BackendStatus() {
-  const [status,  setStatus]  = useState('checking')   // 'checking' | 'online' | 'offline'
+  const [status, setStatus] = useState('checking')   // 'checking' | 'online' | 'offline'
 
   async function check() {
     setStatus('checking')
@@ -33,7 +33,7 @@ export default function BackendStatus() {
           </div>
           {status === 'offline' && (
             <div style={{ fontSize:11, opacity:0.85, marginTop:2 }}>
-              Tried: {BACKEND_CANDIDATES.join(', ')}
+              {BACKEND_URL}
             </div>
           )}
         </div>
