@@ -251,8 +251,8 @@ export default function Login({ onLogin }) {
             <div style={{ marginTop:16, padding:'10px 14px', background:'#f1f8f2',
               borderRadius:8, border:'1px solid #c8e6c9', fontSize:12, color:'#555' }}>
               <strong style={{color:'#2e7d32'}}>Demo credentials:</strong><br/>
-              Admin: admin@smf.tz / smf@1234<br/>
-              Ranger: ranger@smf.tz / smf@1234
+              System Admin: admin@smf.tz / smf@1234<br/>
+              Forest Officer: officer@smf.tz / smf@1234
             </div>
           </div>
         </div>

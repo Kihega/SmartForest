@@ -177,11 +177,11 @@ function AdminHome({ customers, devices, alerts, sensors, count,
       {/* ── Stat row ── */}
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:14 }}>
         {[
-          { icon:<Ico paths={I.users} size={22} color="#1b5e20"/>,  label:'Total Customers', val:customers.length, color:'#1b5e20' },
+          { icon:<Ico paths={I.users} size={22} color="#1b5e20"/>,  label:'Forest Officers', val:customers.length, color:'#1b5e20' },
           { icon:<Ico paths={I.device} size={22} color="#2563eb"/>, label:'Total Devices',   val:devices.length,   color:'#2563eb' },
           { icon:<Ico paths={I.active} size={22} color="#16a34a"/>, label:'Active Devices',  val:activeCount,      color:'#16a34a' },
           { icon:<Ico paths={I.alert} size={22} color="#dc2626"/>,  label:'Open Alerts',     val:count,            color:'#dc2626' },
-          { icon:<Ico paths={I.admin} size={22} color="#7c3aed"/>,  label:'Admin Accounts',  val:admins.length,    color:'#7c3aed' },
+          { icon:<Ico paths={I.admin} size={22} color="#7c3aed"/>,  label:'System Admins',   val:admins.length,    color:'#7c3aed' },
         ].map(c => (
           <div key={c.label} style={{ ...statCard, background:surface, color:text }}>
             {c.icon}
@@ -265,14 +265,15 @@ function AdminHome({ customers, devices, alerts, sensors, count,
 /* ── User Management ────────────────────────────────────────────────── */
 function AdminUserTable({ users, session, onRefresh, surface, text }) {
   const [adding, setAdding] = useState(false)
-  const [form,   setForm]   = useState({ name:'', email:'', password:'', role:'ranger' })
+  const [form,   setForm]   = useState({ name:'', email:'', password:'', district:'', role:'officer' })
   const [error,  setError]  = useState('')
   const [ok,     setOk]     = useState('')
   const adminCount = users.filter(u => u.role === 'admin').length
 
   async function deleteUser(u) {
-    if (u.role === 'admin' && adminCount <= 1) { alert('Cannot delete the last admin account.'); return }
-    if (!confirm(`Delete user ${u.email}?`)) return
+    if (u.role === 'admin' && adminCount <= 1) { alert('Cannot delete the last System Admin account.'); return }
+    const label = u.role === 'admin' ? 'System Admin' : 'Forest Officer'
+    if (!confirm(`Delete ${label} ${u.email}?`)) return
     try {
       const api = await getAPI()
       await api.delete(`/admin/users/${u.id}`,
@@ -281,17 +282,16 @@ function AdminUserTable({ users, session, onRefresh, surface, text }) {
     } catch (err) { alert(err?.response?.data?.error || 'Delete failed.') }
   }
 
-  async function addAdmin(e) {
+  async function addUser(e) {
     e.preventDefault(); setError(''); setOk('')
     try {
       const api = await getAPI()
-      await api.post('/admin/users',
-        { ...form, role:'admin' },
+      await api.post('/admin/users', form,
         { headers: { Authorization: `Bearer ${session.token}` } })
-      setOk(`Admin ${form.email} created.`)
-      setForm({ name:'', email:'', password:'', role:'ranger' })
+      setOk(`${form.role === 'admin' ? 'System Admin' : 'Forest Officer'} ${form.email} created.`)
+      setForm({ name:'', email:'', password:'', district:'', role:'officer' })
       setAdding(false); onRefresh()
-    } catch (err) { setError(err?.response?.data?.error || 'Failed to create admin.') }
+    } catch (err) { setError(err?.response?.data?.error || 'Failed to create user.') }
   }
 
   return (
@@ -303,7 +303,7 @@ function AdminUserTable({ users, session, onRefresh, surface, text }) {
           style={{ display:'flex', alignItems:'center', gap:5,
             padding:'7px 16px', background:'#2e7d32', color:'#fff',
             border:'none', borderRadius:7, fontWeight:700, cursor:'pointer', fontSize:13 }}>
-          <Ico paths={I.plus} size={14} color="#fff"/> {adding ? 'Cancel' : 'Add Admin'}
+          <Ico paths={I.plus} size={14} color="#fff"/> {adding ? 'Cancel' : 'Add User'}
         </button>
       </div>
 
@@ -311,7 +311,25 @@ function AdminUserTable({ users, session, onRefresh, surface, text }) {
         <div style={{ background:'#f9fef9', border:'1px solid #c8e6c9', borderRadius:8, padding:16, marginBottom:16 }}>
           {error && <div style={errBanner}>{error}</div>}
           {ok    && <div style={okBanner}>{ok}</div>}
-          <form onSubmit={addAdmin} style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+          <form onSubmit={addUser} style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+            <div>
+              <label style={{ fontSize:12, fontWeight:600, display:'block', marginBottom:3 }}>Role</label>
+              <select value={form.role} onChange={e => setForm(f => ({ ...f, role:e.target.value }))}
+                style={{ width:'100%', padding:'8px 10px', fontSize:13,
+                  border:'1.5px solid #c8e6c9', borderRadius:7, outline:'none', background:'#fff' }}>
+                <option value="officer">Forest Officer (district level)</option>
+                <option value="admin">System Admin (national level)</option>
+              </select>
+            </div>
+            {form.role === 'officer' && (
+              <div>
+                <label style={{ fontSize:12, fontWeight:600, display:'block', marginBottom:3 }}>District</label>
+                <input type="text" value={form.district}
+                  onChange={e => setForm(f => ({ ...f, district:e.target.value }))}
+                  placeholder="e.g. Kilombero" style={{ width:'100%', padding:'8px 10px', fontSize:13,
+                    border:'1.5px solid #c8e6c9', borderRadius:7, outline:'none' }} />
+              </div>
+            )}
             {[['Full Name','name','text'],['Email','email','email'],['Password','password','password']].map(
               ([lbl,k,t]) => (
                 <div key={k}>
@@ -325,7 +343,7 @@ function AdminUserTable({ users, session, onRefresh, surface, text }) {
             <div style={{ gridColumn:'1/-1' }}>
               <button type="submit" style={{ padding:'8px 20px', background:'#1b5e20',
                 color:'#fff', border:'none', borderRadius:7, fontWeight:700, cursor:'pointer' }}>
-                Create Admin
+                {form.role === 'admin' ? 'Create System Admin' : 'Register Forest Officer'}
               </button>
             </div>
           </form>
@@ -334,7 +352,7 @@ function AdminUserTable({ users, session, onRefresh, surface, text }) {
 
       <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
         <thead><tr>
-          {['Name','Email','Role','Joined','Actions'].map(h => <th key={h} style={th}>{h}</th>)}
+          {['Name','Email','Role','District','Joined','Actions'].map(h => <th key={h} style={th}>{h}</th>)}
         </tr></thead>
         <tbody>
           {users.map(u => (
@@ -345,15 +363,16 @@ function AdminUserTable({ users, session, onRefresh, surface, text }) {
                 <span style={u.role==='admin'
                   ? { ...badge, background:'#dcfce7', color:'#15803d' }
                   : { ...badge, background:'#dbeafe', color:'#1d4ed8' }}>
-                  {u.role}
+                  {u.role === 'admin' ? 'System Admin' : 'Forest Officer'}
                 </span>
               </td>
+              <td style={{ ...td, fontSize:12 }}>{u.district || '—'}</td>
               <td style={{ ...td, fontSize:11, color:'#9ca3af' }}>
                 {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}
               </td>
               <td style={td}>
                 <button
-                  title={u.role==='admin' && adminCount<=1 ? 'Cannot delete last admin' : 'Delete user'}
+                  title={u.role==='admin' && adminCount<=1 ? 'Cannot delete last System Admin' : 'Delete user'}
                   onClick={() => deleteUser(u)}
                   disabled={u.id === session?.user?.id}
                   style={{ ...iconBtn, color:'#dc2626', opacity: u.id===session?.user?.id ? 0.3 : 1 }}>

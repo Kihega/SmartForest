@@ -13,7 +13,7 @@ export default function Navbar({ session, alertCount, role }) {
         <NavTitle />
         <span style={roleTag}>
           {role === 'admin' ? <ShieldIcon /> : <UserIcon />}
-          {' '}{role === 'admin' ? 'System Admin' : 'System'}
+          {' '}{role === 'admin' ? 'System Admin' : 'Forest Officer'}
         </span>
       </div>
       <div style={right}>

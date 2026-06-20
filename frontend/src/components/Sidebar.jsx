@@ -25,6 +25,9 @@ const ICONS = {
                 'M2 12h20','M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20'],
   logout:      ['M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4',
                 'M16 17l5-5-5-5','M21 12H9'],
+  rangers:     ['M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2','M9 7a4 4 0 100 8 4 4 0 000-8z',
+                'M19 8v6','M22 11h-6'],
+  district:    ['M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z','M9 22V12h6v10'],
 }
 
 function SvgIcon({ name, size=20 }) {
@@ -53,12 +56,14 @@ function SvgIcon({ name, size=20 }) {
   )
 }
 
-/* ── Sidebar ─────────────────────────────────────────────────────────── */
-export default function Sidebar({ active, onNav, onLogout, mode, onModeChange, lang, onLangChange }) {
+/* ── Sidebar ─────────────────────────────────────────────────────────────
+   `items` can be overridden via props for role-specific navigation
+   (e.g. Forest Officer gets a "Rangers" item instead of "Users").       ── */
+export default function Sidebar({ active, onNav, onLogout, mode, onModeChange, lang, onLangChange, items: itemsProp }) {
   const [modeOpen, setModeOpen] = useState(false)
   const [langOpen, setLangOpen] = useState(false)
 
-  const items = [
+  const items = itemsProp || [
     { id:'home',        iconName:'home',        label:'Home'        },
     { id:'devices',     iconName:'devices',     label:'Devices'     },
     { id:'users',       iconName:'users',       label:'Users'       },
