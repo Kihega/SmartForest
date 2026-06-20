@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import Login                 from './pages/Login.jsx'
-import AdminDashboard        from './pages/AdminDashboard.jsx'
-import ForestOfficerDashboard from './pages/ForestOfficerDashboard.jsx'
-import BackendStatus         from './components/BackendStatus.jsx'
+import Login          from './pages/Login.jsx'
+import AdminDashboard from './pages/AdminDashboard.jsx'
+import UserDashboard  from './pages/UserDashboard.jsx'
+import BackendStatus  from './components/BackendStatus.jsx'
 
 export default function App() {
   const [session, setSession] = useState(
@@ -28,12 +28,9 @@ export default function App() {
     )
   }
 
-  // Roles: 'admin' = System Admin (national level)
-  //        'officer' = Forest Officer (district level)
-  // Forest Rangers are SMS-only field staff and never log into this app.
   if (session.role === 'admin') {
     return <AdminDashboard session={session} onLogout={handleLogout} />
   }
 
-  return <ForestOfficerDashboard session={session} onLogout={handleLogout} />
+  return <UserDashboard session={session} onLogout={handleLogout} />
 }
